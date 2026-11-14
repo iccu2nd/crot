@@ -5,7 +5,6 @@ services:
     environment:
       DATABASE_URL: postgres://scraper:scraper@postgres:5432/scraper
       REDIS_URL: redis://redis:6379
-      TRUST_PROXY: "false"
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

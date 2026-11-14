@@ -55,7 +55,7 @@ export async function createApp(cfg: Config) {
   // ---- domain ----
   const adapters = createProviders(cfg.providers)
   await store.syncProviders(adapters.map(a => ({ key: a.key, name: a.name, baseUrl: a.baseUrl })))
-  const views = new ViewCounter(store, log)
+  const views = new ViewCounter(store, log, 15_000, cfg.serverless)
   const svc = new ScraperService({ adapters, cache: new Cache(redis, log), store, views, log, cfg })
   const warmer = new Warmer(svc, store, cfg.providers, log, cfg.warmer)
 
@@ -127,6 +127,7 @@ export async function createApp(cfg: Config) {
   })
 
   // ---- routes ----
+  app.get('/', { schema: { hide: true } }, async (_req, reply) => reply.redirect('/docs'))
   await app.register(systemRoutes, { store, redis })
   await app.register(
     async v1 => {
@@ -138,6 +139,7 @@ export async function createApp(cfg: Config) {
 
   // ---- lifecycle ----
   app.addHook('onReady', async () => {
+    if (cfg.serverless) return // tanpa timer latar di serverless
     views.start()
     if (cfg.warmer.enabled) warmer.start()
   })

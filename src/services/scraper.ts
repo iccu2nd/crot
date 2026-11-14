@@ -48,7 +48,7 @@ export interface PageQuery {
   provider?: ProviderKey
 }
 
-type ServiceConfig = Pick<Config, 'ttl' | 'aggregateTimeoutMs' | 'primaryTimeoutMs'>
+type ServiceConfig = Pick<Config, 'ttl' | 'aggregateTimeoutMs' | 'primaryTimeoutMs'> & { serverless?: boolean }
 const offsetOf = (q: PageQuery) => (q.page - 1) * q.limit
 const dbPage = (q: PageQuery): DbPage => ({ limit: q.limit, offset: offsetOf(q), provider: q.provider })
 const sameNumber = (a: string, b: string) => (Number.isFinite(+a) && Number.isFinite(+b) ? +a === +b : a === b)
@@ -147,8 +147,10 @@ export class ScraperService {
     }
   }
 
-  private background(p: Promise<unknown>, what: string) {
-    p.catch(e => this.o.log.warn({ err: (e as Error).message }, `background ${what} failed`))
+  /** Persistensi: background (server biasa) atau ditunggu inline (serverless, karena proses dibekukan setelah respons). */
+  private async background(p: Promise<unknown>, what: string) {
+    const safe = p.catch(e => this.o.log.warn({ err: (e as Error).message }, `background ${what} failed`))
+    if (this.o.cfg.serverless) await safe
   }
 
   providers() {
@@ -172,7 +174,7 @@ export class ScraperService {
         : `l:${p.key}:${a.type ?? ''}:${a.page}:${a.limit}`
     return this.o.cache.getOrSet(key, this.o.cfg.ttl[kind], async () => {
       const items = await this.call(p, () => (kind === 'search' ? p.search(a.q!, a) : p.latest(a)))
-      this.background(this.o.store.saveSummaries(items), 'saveSummaries')
+      await this.background(this.o.store.saveSummaries(items), 'saveSummaries')
       return items
     })
   }
@@ -289,7 +291,7 @@ export class ScraperService {
   private detailFrom(p: ProviderAdapter, ref: string) {
     return this.o.cache.getOrSet<SeriesDetail>(`d:${p.key}:${ref}`, this.o.cfg.ttl.detail, async () => {
       const d = await this.call(p, () => p.detail(ref))
-      this.background(this.o.store.saveDetail(d), 'saveDetail')
+      await this.background(this.o.store.saveDetail(d), 'saveDetail')
       return d
     })
   }

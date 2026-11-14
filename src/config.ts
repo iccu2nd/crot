@@ -1,37 +1,28 @@
-import { PROVIDER_KEYS, type ProviderKey } from './core/types.js'
+import { PROVIDER_KEYS } from './core/types.js'
 
 const env = process.env
-const int = (k: string, d: number) => {
-  const raw = env[k]
-  const n = raw === undefined || raw === '' ? NaN : Number(raw)
-  return Number.isFinite(n) ? n : d
-}
 const min = (n: number) => n * 60_000
 const hour = (n: number) => n * 3_600_000
 
-const providers = (env.PROVIDERS ?? 'shinigami,manta,lumos')
-  .split(',')
-  .map(s => s.trim())
-  .filter((s): s is ProviderKey => (PROVIDER_KEYS as readonly string[]).includes(s))
+/** true di Vercel (VERCEL=1 otomatis): tanpa timer latar, tulis DB inline, tanpa migrate saat runtime */
+const serverless = env.VERCEL === '1'
 
+/** Hanya DATABASE_URL & REDIS_URL yang perlu diisi; sisanya konstanta. */
 export const config = {
-  port: int('PORT', 3000),
-  host: env.HOST ?? '0.0.0.0',
-  logLevel: env.LOG_LEVEL ?? 'info',
-  trustProxy: env.TRUST_PROXY === 'true',
+  serverless,
+  port: Number(env.PORT) || 3000,
+  host: '0.0.0.0',
+  logLevel: 'info',
+  trustProxy: true,
   databaseUrl: env.DATABASE_URL ?? 'postgres://scraper:scraper@localhost:5432/scraper',
-  pgPoolMax: int('PG_POOL_MAX', 10),
-  autoMigrate: env.AUTO_MIGRATE !== 'false',
   redisUrl: env.REDIS_URL ?? 'redis://localhost:6379',
-  providers: providers.length ? providers : [...PROVIDER_KEYS],
-  rateLimitMax: int('RATE_LIMIT_MAX', 120),
-  aggregateTimeoutMs: int('AGGREGATE_TIMEOUT_MS', 8000),
-  primaryTimeoutMs: int('PRIMARY_TIMEOUT_MS', 12000),
-  warmer: {
-    enabled: env.WARMER !== 'false',
-    intervalMs: int('WARM_INTERVAL_SEC', 600) * 1000,
-    enrich: int('WARM_ENRICH', 5)
-  },
+  pgPoolMax: serverless ? 2 : 10,
+  autoMigrate: !serverless,
+  providers: [...PROVIDER_KEYS].sort((a, b) => ['shinigami', 'manta', 'lumos'].indexOf(a) - ['shinigami', 'manta', 'lumos'].indexOf(b)),
+  rateLimitMax: 120,
+  aggregateTimeoutMs: 8000,
+  primaryTimeoutMs: 12000,
+  warmer: { enabled: true, intervalMs: 600_000, enrich: 5 },
   /** fresh = dilayani langsung, stale = dilayani + refresh background / saat upstream gagal */
   ttl: {
     search: { fresh: min(5), stale: hour(1) },

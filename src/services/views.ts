@@ -9,7 +9,8 @@ export class ViewCounter {
   constructor(
     private readonly store: Pick<Store, 'addViews'>,
     private readonly log: FastifyBaseLogger,
-    private readonly intervalMs = 15_000
+    private readonly intervalMs = 15_000,
+    private readonly immediate = false
   ) {}
 
   hit(provider: ProviderKey, ref: string) {
@@ -17,6 +18,7 @@ export class ViewCounter {
     const e = this.buf.get(key)
     if (e) e.n++
     else this.buf.set(key, { provider, ref, n: 1 })
+    if (this.immediate) void this.flush()
   }
 
   start() {

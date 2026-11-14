@@ -9,7 +9,7 @@ docker compose up --build          # API di :3000, dokumentasi di /docs
 # atau lokal:
 cp .env.example .env && npm install && npm run build && npm start
 ```
-Migration otomatis saat start (`AUTO_MIGRATE=true`) atau manual `npm run migrate`.
+Migration otomatis saat start, atau manual `npm run migrate`. Env yang dipakai hanya `DATABASE_URL` dan `REDIS_URL`; pengaturan lain (TTL, rate limit, prioritas provider) ada di `src/config.ts`.
 
 **Verifikasi scraper ke situs asli (wajib dijalankan sekali di jaringan Anda):**
 ```bash
@@ -19,6 +19,17 @@ npm run smoke manta      # satu provider
 Alur: latest → search → detail → chapter, lengkap dengan waktu & jumlah data; exit code 1 jika ada yang gagal.
 
 Tes: `npm test` (unit). Tes integrasi DB: `TEST_DATABASE_URL=postgres://.../scraper_test npm test`.
+
+## Deploy ke Vercel (serverless)
+Vercel tidak menjalankan server permanen, jadi proyek memakai `api/index.js` + `vercel.json` dan mode serverless otomatis (`VERCEL=1`):
+tanpa timer latar/warmer, penulisan DB dilakukan inline, tanpa migrate saat runtime.
+
+1. Siapkan **PostgreSQL terkelola** (Neon / Supabase / Vercel Postgres, pakai URL *pooled*) dan **Redis** (Upstash, URL `rediss://...`).
+2. Di Vercel → Settings → Environment Variables (centang Production **dan Build**): hanya `DATABASE_URL` (akhiri `?sslmode=require`) dan `REDIS_URL`. Tidak ada env lain.
+3. Deploy. Build menjalankan `npm run build && npm run migrate` (migration otomatis saat deploy).
+4. Buka `/docs`. Jika masih 500, lihat `vercel logs <request-id>`; penyebab tersering: `DATABASE_URL`/`REDIS_URL` belum diisi atau salah.
+
+Catatan: cold start sedikit lebih lambat (koneksi DB/Redis). Untuk performa terbaik dan warmer aktif, pakai host server biasa (Railway/Render/Fly/VPS + `docker compose up`).
 
 ## Endpoint (`/v1`, dokumentasi interaktif di `/docs`)
 | Endpoint | Fungsi |
@@ -52,7 +63,7 @@ Warmer berkala mengisi cache/DB dan memperkaya seri tanpa genre.
 
 ## Database (PostgreSQL)
 `providers`, `series` (unik `(provider, ref)`, `norm_title`, index trigram untuk pencarian lokal), `genres` + `series_genres`,
-`chapters` (unik `(series_id, ref)`), `series_views`. Pool koneksi `PG_POOL_MAX`, `statement_timeout` 8 dtk.
+`chapters` (unik `(series_id, ref)`), `series_views`. Connection pool (10, di Vercel 2), `statement_timeout` 8 dtk.
 Migration: `migrations/*.sql` (transaksional, advisory lock).
 
 ## Lumos (parser terbaru)
