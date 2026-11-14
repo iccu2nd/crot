@@ -4,11 +4,14 @@ import { sleep } from './util.js'
 export interface RequestOptions {
   headers: Record<string, string>
   timeoutMs: number
+  /** Opsional: batalkan request dari luar (mis. saat mirror lain sudah menang). */
+  signal?: AbortSignal
 }
 
 /** fetch + timeout; 404 -> NotFoundError, non-2xx -> UpstreamError. */
-export async function request(url: string, { headers, timeoutMs }: RequestOptions): Promise<Response> {
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) })
+export async function request(url: string, { headers, timeoutMs, signal }: RequestOptions): Promise<Response> {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  const res = await fetch(url, { headers, signal: signal ? AbortSignal.any([timeout, signal]) : timeout })
   if (res.status === 404) {
     await res.body?.cancel()
     throw new NotFoundError('Not found upstream')

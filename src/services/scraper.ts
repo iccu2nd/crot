@@ -190,7 +190,7 @@ export class ScraperService {
           const r = await withDeadline(run(p), this.o.cfg.aggregateTimeoutMs)
           return { key: p.key, items: r.value, state: r.state, status: (r.state === 'stale' ? 'stale' : 'ok') as ProviderStatus }
         } catch (e) {
-          return { key: p.key, items: [] as SeriesSummary[], state: null, status: statusOf(e) }
+          return { key: p.key, items: [] as SeriesSummary[], state: null, status: statusOf(e), error: (e as Error)?.message }
         }
       })
     )
@@ -200,7 +200,10 @@ export class ScraperService {
     if (!alive.length) {
       // Semua provider gagal -> data terakhir yang pernah tersimpan di PostgreSQL.
       const rows = await local().catch(() => [])
-      if (!rows.length) throw new UpstreamError('Semua provider gagal dan belum ada data tersimpan')
+      if (!rows.length) {
+        const why = settled.map(r => ('error' in r && r.error ? `${r.key}: ${r.error}` : '')).filter(Boolean).join(' | ')
+        throw new UpstreamError(`Semua provider gagal dan belum ada data tersimpan${why ? ` (${why})` : ''}`)
+      }
       return { data: rows, meta: { page: q.page, limit: q.limit, count: rows.length, providers, degraded: true, source: 'db' } }
     }
 

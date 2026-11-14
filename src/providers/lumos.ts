@@ -1,4 +1,4 @@
-import { NotFoundError } from '../core/errors.js'
+import { NotFoundError, TimeoutError, UpstreamError } from '../core/errors.js'
 import { request } from '../core/http.js'
 import { cid, sid } from '../core/ids.js'
 import type {
@@ -15,6 +15,15 @@ import { compact, memo, numOrNull, slugify, splitOnce } from '../core/util.js'
 const KEY = 'lumos'
 const BASES = ['https://03.lumosgg.com', 'https://02.lumosgg.com', 'https://lumoskomik.com']
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+/** Timeout per percobaan mirror; harus jauh di bawah aggregateTimeoutMs (8s) supaya error asli tidak tertutup timeout. */
+const ATTEMPT_MS = 4000
+/** Jika mirror pertama belum menjawab segini lama, mirror berikutnya ikut dijalankan paralel (hedged). */
+const HEDGE_MS = 1500
+/** Mirror yang baru gagal dilewati sementara. */
+const COOLDOWN_MS = 20_000
+/** Total waktu satu operasi (di bawah aggregateTimeoutMs 8s / primaryTimeoutMs 12s). */
+const LIST_BUDGET_MS = 7000
+const PAGE_BUDGET_MS = 11000
 const STATUSES = ['ongoing', 'completed', 'hiatus']
 const LUMOS_TYPES = ['manga', 'manhwa', 'manhua']
 
@@ -29,30 +38,148 @@ const statusOf = (s: unknown): SeriesStatus | null => {
   return STATUSES.includes(v) ? (v as SeriesStatus) : null
 }
 
+
+/** Ringkas penyebab gagal untuk pesan error / diagnosa. */
+function why(e: unknown): string {
+  if (e instanceof NotFoundError) return '404'
+  const x = e as { name?: string; message?: string; cause?: { code?: string } }
+  if (x?.name === 'TimeoutError' || e instanceof TimeoutError) return 'timeout'
+  if (x?.name === 'AbortError') return 'dibatalkan'
+  return x?.cause?.code ? `${x.message} (${x.cause.code})` : x?.message || 'error'
+}
+
+/**
+ * Jalankan task berurutan tapi "hedged": task berikut dimulai setelah `staggerMs` ATAU segera setelah
+ * task sebelumnya gagal. Hasil sukses pertama menang dan sisanya dibatalkan. Semua gagal -> reject dengan daftar error.
+ */
+function hedge<T>(tasks: ((signal: AbortSignal) => Promise<T>)[], staggerMs: number, outer?: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const ctl = new AbortController()
+    const errors: unknown[] = []
+    let started = 0
+    let failed = 0
+    let done = false
+    let timer: NodeJS.Timeout | undefined
+
+    const finish = (fn: () => void) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      outer?.removeEventListener('abort', onOuter)
+      fn()
+      ctl.abort()
+    }
+    const onOuter = () => finish(() => reject(Object.assign(new Error('Batas waktu operasi habis'), { name: 'TimeoutError', errors })))
+    const launch = () => {
+      if (done || started >= tasks.length) return
+      const task = tasks[started++]
+      clearTimeout(timer)
+      if (started < tasks.length) timer = setTimeout(launch, staggerMs)
+      task(ctl.signal).then(
+        v => finish(() => resolve(v)),
+        e => {
+          if (done) return
+          errors.push(e)
+          failed++
+          if (failed >= tasks.length) finish(() => reject(Object.assign(new Error('Semua percobaan gagal'), { errors })))
+          else if (started - failed <= 0) launch() // tidak ada yang masih jalan -> lanjut sekarang
+        }
+      )
+    }
+    if (outer?.aborted) return onOuter()
+    outer?.addEventListener('abort', onOuter, { once: true })
+    launch()
+  })
+}
+
+/** Deteksi halaman tantangan Cloudflare / WAF yang dikembalikan sebagai 200. */
+const blocked = (body: string) => body.length < 6000 && /just a moment|cf-browser-verification|challenge-platform|attention required|enable javascript and cookies/i.test(body)
+
 export function createLumos(): ProviderAdapter {
   let site = BASES[0]
 
-  /** Coba tiap mirror berurutan; 404 menghentikan rotasi. */
-  async function get<T>(path: string, accept: string, read: (r: Response) => Promise<T>): Promise<T> {
-    let error: unknown
-    for (const base of BASES) {
+  /** mirror -> waktu (ms epoch) sampai boleh dicoba lagi */
+  const cooling = new Map<string, number>()
+
+  /** Urutan mirror: yang terakhir berhasil dulu, yang sedang cooldown di belakang. */
+  function order(): string[] {
+    const now = Date.now()
+    const list = [site, ...BASES.filter(b => b !== site)]
+    return [...list.filter(b => (cooling.get(b) ?? 0) <= now), ...list.filter(b => (cooling.get(b) ?? 0) > now)]
+  }
+
+  /**
+   * Ambil `path` dari mirror yang paling cepat menjawab (hedged). 404 di SEMUA mirror = NotFound;
+   * selain itu error berisi rincian per mirror supaya penyebab (403/timeout/dll) kelihatan.
+   */
+  async function get<T>(path: string, kind: 'json' | 'html', read: (body: string) => T, outer?: AbortSignal): Promise<T> {
+    const accept = kind === 'json' ? 'application/json, text/plain, */*' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    const bases = order()
+    const reasons = new Map<string, unknown>()
+    const attempt = (base: string) => async (signal: AbortSignal): Promise<{ base: string; out: T }> => {
       try {
         const res = await request(base + path, {
-          headers: { 'user-agent': UA, accept, 'accept-language': 'id,en-US;q=0.9,en;q=0.8', referer: `${base}/` },
-          timeoutMs: 10000
+          headers: {
+            'user-agent': UA,
+            accept,
+            'accept-language': 'id,en-US;q=0.9,en;q=0.8',
+            referer: `${base}/`,
+            ...(kind === 'html' ? { 'upgrade-insecure-requests': '1', 'sec-fetch-dest': 'document', 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'same-origin' } : { 'sec-fetch-dest': 'empty', 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'same-origin' })
+          },
+          timeoutMs: ATTEMPT_MS,
+          signal
         })
-        const out = await read(res)
-        site = base
-        return out
+        const body = await res.text()
+        if (blocked(body)) throw new UpstreamError('diblokir Cloudflare (halaman tantangan)', 403)
+        if (kind === 'json' && /^\s*</.test(body)) throw new UpstreamError('respons bukan JSON')
+        return { base, out: read(body) }
       } catch (e) {
-        error = e
-        if (e instanceof NotFoundError) break
+        reasons.set(base, e)
+        if (!(e instanceof NotFoundError) && why(e) !== 'dibatalkan') cooling.set(base, Date.now() + COOLDOWN_MS)
+        throw e
       }
     }
-    throw error
+    try {
+      const { base, out } = await hedge(bases.map(attempt), HEDGE_MS, outer)
+      site = base
+      cooling.delete(base)
+      return out
+    } catch (e) {
+      const errors = [...reasons.values()]
+      if (errors.length && errors.every(x => x instanceof NotFoundError)) throw new NotFoundError('Not found upstream')
+      const detail = [...reasons].map(([b, x]) => `${new URL(b).host}: ${why(x)}`).join('; ') || why(e)
+      if (!errors.length || errors.every(x => ['timeout', 'dibatalkan'].includes(why(x)))) throw new TimeoutError(`Lumos timeout (${detail})`)
+      const status = errors.map(x => (x as UpstreamError)?.upstreamStatus).find(Boolean)
+      throw new UpstreamError(`Lumos gagal (${detail})`, status)
+    }
   }
-  const getJson = (path: string): Promise<any> => get(path, 'application/json, text/plain, */*', r => r.json())
-  const getHtml = (path: string) => get(path, 'text/html,application/xhtml+xml,*/*;q=0.8', r => r.text())
+  const parseJson = (body: string) => {
+    try {
+      return JSON.parse(body)
+    } catch {
+      throw new UpstreamError('respons bukan JSON valid')
+    }
+  }
+  const getJson = (path: string, signal?: AbortSignal): Promise<any> => get(path, 'json', parseJson, signal)
+  const getHtml = (path: string, signal?: AbortSignal) => get(path, 'html', b => b, signal)
+  const budget = (ms: number) => AbortSignal.timeout(ms)
+
+  /** Jalankan beberapa strategi (API lalu HTML) hedged; gagal semua -> satu error dengan rincian tiap strategi. */
+  async function settle<T>(names: string[], tasks: ((s: AbortSignal) => Promise<T>)[], outer: AbortSignal): Promise<T> {
+    try {
+      return await hedge(
+        tasks.map(t => (s: AbortSignal) => t(AbortSignal.any([outer, s]))),
+        2500,
+        outer
+      )
+    } catch (e) {
+      const errors = (e as { errors?: unknown[] }).errors ?? [e]
+      const detail = errors.map((x, i) => `${names[i] ?? i}: ${(x as Error)?.message || why(x)}`).join(' | ')
+      if (errors.every(x => x instanceof NotFoundError)) throw new NotFoundError('Not found upstream')
+      if (errors.every(x => x instanceof TimeoutError || ['timeout', 'dibatalkan'].includes(why(x)))) throw new TimeoutError(detail)
+      throw new UpstreamError(detail, errors.map(x => (x as UpstreamError)?.upstreamStatus).find(Boolean))
+    }
+  }
 
   /** Thumbnail Lumos bisa berupa `?src=<base64url>`; dekode ke URL CDN langsung. */
   function image(src?: string | null): string {
@@ -105,7 +232,7 @@ export function createLumos(): ProviderAdapter {
   }, 3_600_000, 1)
 
   /** Katalog /browse (kartu `htg-card`). */
-  async function browse(o: BrowseOptions): Promise<SeriesSummary[]> {
+  async function browse(o: BrowseOptions, signal: AbortSignal = budget(LIST_BUDGET_MS)): Promise<SeriesSummary[]> {
     let genre: { slug: string; name: string } | undefined
     if (o.genre) {
       genre = (await lumosGenres('').catch(() => undefined))?.get(o.genre)
@@ -120,7 +247,7 @@ export function createLumos(): ProviderAdapter {
     if (genre) params.set('genre', genre.slug)
     if (o.q) params.set('q', o.q)
 
-    const html = await getHtml(`/browse?${params}`)
+    const html = await getHtml(`/browse?${params}`, signal)
     const out: SeriesSummary[] = []
     const card = /<div[^>]*class="[^"]*htg-card[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]*class="[^"]*htg-card[^"]*"|$)/gi
     for (const m of html.matchAll(card)) {
@@ -147,8 +274,8 @@ export function createLumos(): ProviderAdapter {
     return out
   }
 
-  async function chapterListApi(slug: string): Promise<{ slug: string; number: string; title: string }[]> {
-    const data = await getJson(`/api/chapters/list?comic=${encodeURIComponent(slug)}`)
+  async function chapterListApi(slug: string, signal?: AbortSignal): Promise<{ slug: string; number: string; title: string }[]> {
+    const data = await getJson(`/api/chapters/list?comic=${encodeURIComponent(slug)}`, signal)
     return (data?.chapters ?? [])
       .map((c: Raw) => {
         const s = c.slug || `chapter-${String(c.number).replace(/\./g, '-')}`
@@ -167,25 +294,37 @@ export function createLumos(): ProviderAdapter {
       return [...(await lumosGenres('')).values()].map(g => g.name)
     },
 
-    /** page 1 = instant search API (fallback ke katalog); page > 1 = katalog `/browse?q=`. */
+    /** page 1 = instant search API (hedged dengan katalog `/browse?q=` sebagai cadangan); page > 1 = katalog. */
     async search(query, { page, limit }) {
-      if (page > 1) return (await browse({ page, sort: 'latest', q: query })).slice(0, limit)
-      try {
-        const data = await getJson(`/api/search?q=${encodeURIComponent(query)}`)
-        if (Array.isArray(data?.results)) return compact<SeriesSummary>(data.results.map(toSummary)).slice(0, limit)
-      } catch {}
-      return (await browse({ page: 1, sort: 'latest', q: query })).slice(0, limit)
+      const signal = budget(LIST_BUDGET_MS)
+      if (page > 1) return (await browse({ page, sort: 'latest', q: query }, signal)).slice(0, limit)
+      const viaApi = async (s: AbortSignal) => {
+        const data = await getJson(`/api/search?q=${encodeURIComponent(query)}`, s)
+        const rows = data?.results ?? data?.data?.results ?? data?.data
+        if (!Array.isArray(rows)) throw new UpstreamError('format /api/search tidak dikenali')
+        return compact<SeriesSummary>(rows.map(toSummary))
+      }
+      const viaBrowse = (s: AbortSignal) => browse({ page: 1, sort: 'latest', q: query }, s)
+      return (await settle(['api', 'browse'], [viaApi, viaBrowse], signal)).slice(0, limit)
     },
 
-    /** Ukuran halaman ditentukan upstream; `limit` tidak berpengaruh. */
+    /** Ukuran halaman ditentukan upstream; `limit` tidak berpengaruh. API home-latest, cadangan katalog terbaru. */
     async latest({ page }) {
-      const data = await getJson(`/api/home-latest?page=${page}`)
-      return compact<SeriesSummary>((data?.data?.items ?? []).map(toSummary))
+      const signal = budget(LIST_BUDGET_MS)
+      const viaApi = async (s: AbortSignal) => {
+        const data = await getJson(`/api/home-latest?page=${page}`, s)
+        const rows = data?.data?.items ?? data?.items ?? data?.results
+        if (!Array.isArray(rows)) throw new UpstreamError('format /api/home-latest tidak dikenali')
+        return compact<SeriesSummary>(rows.map(toSummary))
+      }
+      const viaBrowse = (s: AbortSignal) => browse({ page, sort: 'latest' }, s)
+      return settle(['api', 'browse'], [viaApi, viaBrowse], signal)
     },
 
     async detail(ref): Promise<SeriesDetail> {
       const slug = ref
-      const html = await getHtml(`/comic/${encodeURIComponent(slug)}`)
+      const signal = budget(PAGE_BUDGET_MS)
+      const html = await getHtml(`/comic/${encodeURIComponent(slug)}`, signal)
       const pick = (re: RegExp) => text(html.match(re)?.[1])
 
       const found: { slug: string; number: string; title: string }[] = []
@@ -198,7 +337,7 @@ export function createLumos(): ProviderAdapter {
         })
       }
       found.sort(byNumber)
-      const rows = found.length ? found : await chapterListApi(slug).catch(() => [])
+      const rows = found.length ? found : await chapterListApi(slug, signal).catch(() => [])
       const chapters: ChapterSummary[] = rows.map(c => ({
         id: cid(KEY, `${slug}:${c.slug}`),
         number: c.number,
@@ -235,7 +374,7 @@ export function createLumos(): ProviderAdapter {
     /** ref chapter = `<comicSlug>:<chapterSlug>` */
     async chapter(ref): Promise<ChapterContent> {
       const [slug, chapterSlug] = splitOnce(ref)
-      const html = await getHtml(`/read/${encodeURIComponent(slug)}/${encodeURIComponent(chapterSlug)}`)
+      const html = await getHtml(`/read/${encodeURIComponent(slug)}/${encodeURIComponent(chapterSlug)}`, budget(PAGE_BUDGET_MS))
 
       const pages = [...html.matchAll(/<img[^>]+(?:alt="Page\s*(\d+)"[^>]+src="([^"]+)"|src="([^"]+)"[^>]+alt="Page\s*(\d+)")/gi)]
         .map(m => ({ page: parseInt(m[1] || m[4], 10), url: image(m[2] || m[3]) }))

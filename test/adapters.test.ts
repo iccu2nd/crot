@@ -176,3 +176,71 @@ describe('lumos (parser mengikuti scraper terbaru)', () => {
     } finally { m.restore() }
   })
 })
+
+describe('lumos (ketahanan: mirror lambat/diblokir)', () => {
+  /** fetch palsu per-host: handler boleh menggantung (hormati abort) atau membalas. */
+  function hostFetch(h: Record<string, (url: string, signal?: AbortSignal | null) => Promise<Response> | Response>) {
+    const calls: string[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = (async (input: any, init?: any) => {
+      const url = String(input)
+      calls.push(url)
+      const host = Object.keys(h).find(k => url.startsWith(k))
+      if (!host) return new Response('no route', { status: 599 })
+      return h[host](url, init?.signal)
+    }) as typeof fetch
+    return { calls, restore: () => void (globalThis.fetch = original) }
+  }
+  const hang = (_u: string, signal?: AbortSignal | null) =>
+    new Promise<Response>((_, rej) => signal?.addEventListener('abort', () => rej(signal.reason ?? new DOMException('Aborted', 'AbortError'))))
+  const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200 })
+  const items = { results: [{ slug: 's1', title: 'Lumos T' }] }
+
+  it('mirror pertama menggantung -> mirror kedua menjawab dalam < 4 detik', async () => {
+    const m = hostFetch({ 'https://03.lumosgg.com': hang, 'https://02.lumosgg.com': () => json(items) })
+    try {
+      const t0 = Date.now()
+      const r = await createLumos().search('x', { page: 1, limit: 5 })
+      assert.equal(r.length, 1)
+      assert.ok(Date.now() - t0 < 4000, 'tidak menunggu timeout mirror pertama')
+    } finally { m.restore() }
+  })
+
+  it('halaman tantangan Cloudflare (200) dianggap gagal -> pindah mirror', async () => {
+    const m = hostFetch({
+      'https://03.lumosgg.com': () => new Response('<html><title>Just a moment...</title></html>', { status: 200 }),
+      'https://02.lumosgg.com': () => json(items)
+    })
+    try {
+      assert.equal((await createLumos().search('x', { page: 1, limit: 5 })).length, 1)
+    } finally { m.restore() }
+  })
+
+  it('API search mati -> cadangan katalog /browse', async () => {
+    const card = '<div class="htg-card"><a href="/comic/abc"><h3>Judul</h3></a></div>'
+    const m = hostFetch({ 'https://': url => (url.includes('/api/') ? new Response('x', { status: 403 }) : new Response(card, { status: 200 })) })
+    try {
+      const r = await createLumos().search('judul', { page: 1, limit: 5 })
+      assert.deepEqual(r.map(x => x.id), ['lumos:abc'])
+    } finally { m.restore() }
+  })
+
+  it('semua mirror gagal -> error menyebut penyebab per mirror (bukan timeout samar)', async () => {
+    const m = hostFetch({ 'https://': () => new Response('forbidden', { status: 403 }) })
+    try {
+      await assert.rejects(createLumos().latest({ page: 1, limit: 5 }), (e: any) => {
+        assert.equal(e.status, 502)
+        assert.match(e.message, /03\.lumosgg\.com: HTTP 403/)
+        return true
+      })
+    } finally { m.restore() }
+  })
+
+  it('404 di semua mirror = NotFound (bukan 502)', async () => {
+    const m = hostFetch({ 'https://': () => new Response('nope', { status: 404 }) })
+    try {
+      await assert.rejects(createLumos().detail('tidak-ada'), (e: any) => e.status === 404)
+    } finally { m.restore() }
+  })
+})
+
