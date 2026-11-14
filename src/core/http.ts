@@ -18,7 +18,8 @@ export async function request(url: string, { headers, timeoutMs, signal }: Reque
   }
   if (!res.ok) {
     await res.body?.cancel()
-    throw new UpstreamError(`HTTP ${res.status}`, res.status)
+    const hint = [res.headers.get('cf-mitigated') && `cf-mitigated: ${res.headers.get('cf-mitigated')}`, res.headers.get('server') && `server: ${res.headers.get('server')}`].filter(Boolean).join(', ')
+    throw new UpstreamError(`HTTP ${res.status}${hint ? ` [${hint}]` : ''}`, res.status)
   }
   return res
 }

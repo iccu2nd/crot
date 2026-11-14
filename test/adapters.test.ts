@@ -244,3 +244,99 @@ describe('lumos (ketahanan: mirror lambat/diblokir)', () => {
   })
 })
 
+
+describe('lumos relay', () => {
+  it('LUMOS_RELAY mengalihkan request lewat relay', async () => {
+    process.env.LUMOS_RELAY = 'https://relay.example.workers.dev'
+    process.env.LUMOS_RELAY_KEY = 'k'
+    const mod = await import('../src/providers/lumos.js?relay')
+    const calls: { url: string; key: string | null }[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = (async (input: any, init?: any) => {
+      calls.push({ url: String(input), key: new Headers(init?.headers).get('x-relay-key') })
+      return new Response(JSON.stringify({ results: [{ slug: 's1', title: 'T' }] }), { status: 200 })
+    }) as typeof fetch
+    try {
+      assert.equal((await mod.createLumos().search('x', { page: 1, limit: 5 })).length, 1)
+      assert.ok(calls[0].url.startsWith('https://relay.example.workers.dev/?url=https%3A%2F%2F03.lumosgg.com%2Fapi%2Fsearch'))
+      assert.equal(calls[0].key, 'k')
+    } finally {
+      globalThis.fetch = original
+      delete process.env.LUMOS_RELAY
+      delete process.env.LUMOS_RELAY_KEY
+    }
+  })
+})
+
+describe('lumos upstream (Railway) saat direct diblokir 403', () => {
+  const RAILWAY = 'https://scraper.up.railway.app'
+  const item = { id: 'lumos:s1', source: 'lumos', title: 'Lumos T', cover: 'https://cdn/c.jpg', type: 'Manhwa', status: 'ongoing', genres: ['Action'], rating: 4.5, latestChapter: '10', url: 'https://03.lumosgg.com/comic/s1' }
+  const ok = (data: unknown) => new Response(JSON.stringify({ success: true, data }), { status: 200 })
+
+  async function setup() {
+    process.env.LUMOS_UPSTREAM = RAILWAY
+    const mod = await import('../src/providers/lumos.js?upstream')
+    const calls: string[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input)
+      calls.push(url)
+      if (!url.startsWith(RAILWAY)) return new Response('forbidden', { status: 403 })
+      if (url.includes('/api/search')) return ok([item])
+      if (url.includes('/api/latest')) return ok([item])
+      if (url.includes('/api/detail/lumos/s1')) return ok({ ...item, synopsis: 'Sinopsis', chapters: [{ id: 'chapter-10', number: '10', title: 'X' }, { id: 'chapter-9', number: '9' }] })
+      if (url.includes('/api/chapter/lumos/s1/chapter-10')) return ok({ id: 'chapter-10', number: '10', images: ['https://cdn/1.jpg', 'https://cdn/2.jpg'], prev: 'chapter-9', next: null })
+      return new Response('no route', { status: 404 })
+    }) as typeof fetch
+    return { mod, calls, restore: () => { globalThis.fetch = original; delete process.env.LUMOS_UPSTREAM } }
+  }
+
+  it('search/latest/detail/chapter jatuh ke upstream dan dipetakan ke format unified', async () => {
+    const t = await setup()
+    try {
+      const a = t.mod.createLumos()
+      const [s] = await a.search('solo', { page: 1, limit: 5 })
+      assert.deepEqual([s.id, s.type, s.status, s.rating, s.latestChapter], ['lumos:s1', 'manhwa', 'ongoing', 4.5, '10'])
+      assert.equal((await a.latest({ page: 1, limit: 5 })).length, 1)
+      const d = await a.detail('s1')
+      assert.deepEqual(d.chapters.map(c => c.id), ['lumos:s1:chapter-10', 'lumos:s1:chapter-9'])
+      assert.equal(d.synopsis, 'Sinopsis')
+      const c = await a.chapter('s1:chapter-10')
+      assert.equal(c.images.length, 2)
+      assert.equal(c.prev, 'lumos:s1:chapter-9')
+      assert.equal(c.next, null)
+    } finally { t.restore() }
+  })
+
+  it('setelah terdeteksi 403, request berikutnya langsung ke upstream (tanpa menunggu direct)', async () => {
+    const t = await setup()
+    try {
+      const a = t.mod.createLumos()
+      await a.latest({ page: 1, limit: 5 })
+      t.calls.length = 0
+      await a.search('solo', { page: 1, limit: 5 })
+      assert.ok(t.calls[0].startsWith(RAILWAY), t.calls[0])
+    } finally { t.restore() }
+  })
+})
+
+describe('lumos proxy publik (tanpa Railway)', () => {
+  it('direct 403 di semua mirror -> proxy publik menjawab; request berikutnya langsung lewat proxy', async () => {
+    const calls: string[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.startsWith('https://api.allorigins.win/raw?url=')) return new Response(JSON.stringify({ results: [{ slug: 's1', title: 'Lumos T' }] }), { status: 200 })
+      return new Response('forbidden', { status: 403 })
+    }) as typeof fetch
+    try {
+      const a = createLumos()
+      assert.equal((await a.search('x', { page: 1, limit: 5 })).length, 1)
+      assert.ok(calls.some(u => u.includes('allorigins') && u.includes(encodeURIComponent('https://03.lumosgg.com/api/search'))))
+      calls.length = 0
+      await a.search('y', { page: 1, limit: 5 })
+      assert.ok(calls[0].includes('allorigins'), 'jalur yang berhasil dicoba duluan: ' + calls[0])
+    } finally { globalThis.fetch = original }
+  })
+})
