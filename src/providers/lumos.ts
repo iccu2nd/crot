@@ -14,25 +14,6 @@ import { compact, memo, numOrNull, slugify, splitOnce } from '../core/util.js'
 
 const KEY = 'lumos'
 const BASES = ['https://03.lumosgg.com', 'https://02.lumosgg.com', 'https://lumoskomik.com']
-/**
- * Opsional: relay (mis. Cloudflare Worker, lihat relay/lumos-worker.js) untuk situs yang memblokir IP Vercel (HTTP 403).
- * LUMOS_RELAY = https://nama.workers.dev ; LUMOS_RELAY_KEY = kunci rahasia (opsional, header x-relay-key).
- */
-/**
- * Opsional: API unified lain yang IP-nya tidak diblokir Lumos (mis. deploy Railway: https://xxx.up.railway.app).
- * Dipakai otomatis saat akses langsung gagal/diblokir (403). Endpoint yang dipakai: /api/search|latest|popular|browse|detail|chapter|genres.
- */
-const UPSTREAM = (process.env.LUMOS_UPSTREAM ?? '').replace(/\/+$/, '')
-const RELAY = (process.env.LUMOS_RELAY ?? '').replace(/\/+$/, '')
-const RELAY_KEY = process.env.LUMOS_RELAY_KEY ?? ''
-/**
- * Proxy publik gratis sebagai upaya terakhir saat akses langsung diblokir (403). Template memuat `{url}` (di-encode).
- * Ganti lewat LUMOS_PROXIES (pisah koma), atau LUMOS_PROXIES=off untuk mematikan. Tidak dijamin selalu hidup.
- */
-const PROXIES = (process.env.LUMOS_PROXIES ?? 'https://api.allorigins.win/raw?url={url},https://corsproxy.io/?url={url}')
-  .split(',')
-  .map(x => x.trim())
-  .filter(x => x.includes('{url}') && process.env.LUMOS_PROXIES !== 'off')
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 /** Timeout per percobaan mirror; harus jauh di bawah aggregateTimeoutMs (8s) supaya error asli tidak tertutup timeout. */
 const ATTEMPT_MS = 4000
@@ -119,32 +100,27 @@ export function createLumos(): ProviderAdapter {
 
   /** rute -> waktu (ms epoch) sampai boleh dicoba lagi */
   const cooling = new Map<string, number>()
-  /** rute yang terakhir berhasil (direct / relay / proxy:N) -> dicoba duluan */
-  let lastRoute = RELAY ? 'relay' : 'direct'
+  /** rute yang terakhir berhasil (direct) -> dicoba duluan */
+  let lastRoute = 'direct'
 
   interface Route {
     id: string
     base: string
-    via: 'direct' | 'relay' | 'proxy'
+    via: 'direct'
     wrap: (target: string) => string
   }
 
   /**
-   * Semua jalur yang mungkin: direct ke tiap mirror, relay Worker (jika ada), lalu proxy publik (hanya mirror utama).
-   * Urutan: jalur yang terakhir berhasil dulu; jalur yang sedang cooldown di belakang.
+   * Semua mirror. Urutan: yang terakhir berhasil dulu; yang sedang cooldown di belakang.
    */
   function routes(): Route[] {
     const mirrors = [site, ...BASES.filter(b => b !== site)]
-    const all: Route[] = [
-      ...mirrors.map((base): Route => ({ id: `direct|${base}`, base, via: 'direct', wrap: t => t })),
-      ...(RELAY ? mirrors.slice(0, 2).map((base): Route => ({ id: `relay|${base}`, base, via: 'relay', wrap: t => `${RELAY}/?url=${encodeURIComponent(t)}` })) : []),
-      ...PROXIES.map((tpl, i): Route => ({ id: `proxy${i}|${mirrors[0]}`, base: mirrors[0], via: 'proxy', wrap: t => tpl.replace('{url}', encodeURIComponent(t)) }))
-    ]
+    const all: Route[] = mirrors.map((base): Route => ({ id: `direct|${base}`, base, via: 'direct', wrap: t => t }))
     const now = Date.now()
     const rank = (r: Route) => ((cooling.get(r.id) ?? 0) > now ? 2 : r.id.startsWith(lastRoute) ? 0 : 1)
     return all.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i).map(x => x.r)
   }
-  const label = (r: Route) => `${new URL(r.base).host}${r.via === 'direct' ? '' : ` via ${r.id.split('|')[0]}`}`
+  const label = (r: Route) => new URL(r.base).host
 
   /**
    * Ambil `path` lewat jalur tercepat yang berhasil (hedged). 404 di SEMUA jalur = NotFound;
@@ -158,11 +134,10 @@ export function createLumos(): ProviderAdapter {
       try {
         const res = await request(r.wrap(r.base + path), {
           headers: {
-            ...(r.via === 'relay' && RELAY_KEY ? { 'x-relay-key': RELAY_KEY } : {}),
             'user-agent': UA,
             accept,
             'accept-language': 'id,en-US;q=0.9,en;q=0.8',
-            ...(r.via === 'proxy' ? {} : { referer: `${r.base}/` }),
+            referer: `${r.base}/`,
             ...(r.via === 'direct' ? (kind === 'html' ? { 'upgrade-insecure-requests': '1', 'sec-fetch-dest': 'document', 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'same-origin' } : { 'sec-fetch-dest': 'empty', 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'same-origin' }) : {})
           },
           timeoutMs: ATTEMPT_MS,
@@ -449,106 +424,5 @@ export function createLumos(): ProviderAdapter {
     imageHeaders: () => ({ 'user-agent': UA, referer: `${site}/` })
   }
 
-  if (!UPSTREAM) return direct
-
-  // ---- jalur cadangan: API unified lain (Railway) yang tidak diblokir Lumos ----
-  let blockedUntil = 0
-  const isBlock = (e: unknown) => /HTTP 403|diblokir/i.test((e as Error)?.message ?? '')
-
-  async function up<T>(path: string, pick: (data: any) => T, signal: AbortSignal): Promise<T> {
-    const res = await request(UPSTREAM + path, { headers: { accept: 'application/json' }, timeoutMs: 9000, signal })
-    const json = parseJson(await res.text())
-    if (json?.success === false) throw new UpstreamError(String(json.error || 'upstream gagal'))
-    return pick(json?.data)
-  }
-  const qs = (o: Record<string, string | number | undefined>) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)])).toString()
-  const rawSlug = (id: string) => String(id ?? '').replace(/^lumos:/, '')
-
-  function fromItem(i: Raw): SeriesSummary | null {
-    const slug = rawSlug(i.id || i.slug)
-    if (!slug || !i.title) return null
-    const id = sid(KEY, slug)
-    return {
-      id,
-      provider: KEY,
-      title: String(i.title),
-      cover: i.cover || '',
-      url: i.url || `${BASES[0]}/comic/${slug}`,
-      type: String(i.type || '').toLowerCase() || null,
-      status: statusOf(i.status),
-      genres: Array.isArray(i.genres) ? i.genres.map(String) : [],
-      rating: numOrNull(i.rating),
-      chapterCount: numOrNull(i.chapterCount),
-      latestChapter: i.latestChapter != null ? String(i.latestChapter) : null,
-      sources: [{ provider: KEY, id }]
-    }
-  }
-  const list = (data: any): SeriesSummary[] => {
-    if (!Array.isArray(data)) throw new UpstreamError('format list upstream tidak dikenali')
-    return compact<SeriesSummary>(data.map(fromItem))
-  }
-  const link = (slug: string, ch?: string | null) => (ch ? cid(KEY, `${slug}:${rawSlug(ch)}`) : null)
-
-  /** Direct dulu; kalau sebelumnya terdeteksi diblokir (403) -> upstream dulu. Yang pertama sukses menang. */
-  async function race<T>(d: () => Promise<T>, u: (s: AbortSignal) => Promise<T>, ms: number): Promise<T> {
-    const signal = budget(ms)
-    const tracked = async () => {
-      try {
-        const v = await d()
-        blockedUntil = 0
-        return v
-      } catch (e) {
-        if (isBlock(e)) blockedUntil = Date.now() + 300_000
-        throw e
-      }
-    }
-    const upFirst = Date.now() < blockedUntil
-    return settle(upFirst ? ['upstream', 'direct'] : ['direct', 'upstream'], upFirst ? [u, tracked] : [tracked, u], signal)
-  }
-
-  return {
-    ...direct,
-    search: (q, o) =>
-      race(() => direct.search(q, o), s => up(`/api/search?${qs({ q, page: o.page, limit: o.limit, source: 'lumos' })}`, list, s), LIST_BUDGET_MS),
-    latest: o => race(() => direct.latest(o), s => up(`/api/latest?${qs({ page: o.page, source: 'lumos' })}`, list, s), LIST_BUDGET_MS),
-    browse: o =>
-      race(
-        () => direct.browse!(o),
-        s => {
-          const path = o.q
-            ? `/api/search?${qs({ q: o.q, page: o.page, source: 'lumos' })}`
-            : o.genre || o.type
-              ? `/api/browse?${qs({ genre: o.genre, type: o.type, page: o.page, source: 'lumos' })}`
-              : `/api/${o.sort === 'popular' ? 'popular' : 'latest'}?${qs({ page: o.page, source: 'lumos' })}`
-          return up(path, list, s)
-        },
-        LIST_BUDGET_MS
-      ),
-    listGenres: () => race(() => direct.listGenres!(), s => up('/api/genres?source=lumos', (d: any) => (Array.isArray(d) ? d.map((g: Raw) => String(g.name)).filter(Boolean) : []), s), 5000),
-    detail: ref =>
-      race(
-        () => direct.detail(ref),
-        s =>
-          up(`/api/detail/lumos/${encodeURIComponent(ref)}`, (d: any): SeriesDetail => {
-            const base = fromItem({ ...d, id: d?.id || ref })
-            if (!base) throw new UpstreamError('detail upstream kosong')
-            const chapters: ChapterSummary[] = (d.chapters ?? []).map((c: Raw) => ({ id: cid(KEY, `${ref}:${rawSlug(c.id)}`), number: String(c.number ?? ''), title: c.title || '', date: c.date ?? null }))
-            return { ...base, chapterCount: chapters.length, latestChapter: chapters[0]?.number ?? base.latestChapter, synopsis: d.synopsis || '', author: d.author || '', artist: d.artist || '', year: numOrNull(d.year), chapters }
-          }, s),
-        PAGE_BUDGET_MS
-      ),
-    chapter: ref => {
-      const [slug, chapterSlug] = splitOnce(ref)
-      return race(
-        () => direct.chapter(ref),
-        s =>
-          up(`/api/chapter/lumos/${encodeURIComponent(slug)}/${encodeURIComponent(chapterSlug)}`, (d: any): ChapterContent => {
-            const images: string[] = [...new Set<string>((d?.images ?? []).filter(Boolean))]
-            if (!images.length) throw new UpstreamError('chapter upstream tanpa gambar')
-            return { id: cid(KEY, `${slug}:${chapterSlug}`), seriesId: sid(KEY, slug), number: String(d.number ?? numberFromSlug(chapterSlug)), images, prev: link(slug, d.prev), next: link(slug, d.next), imageHeaders: direct.imageHeaders() }
-          }, s),
-        PAGE_BUDGET_MS
-      )
-    }
-  }
+  return direct
 }
