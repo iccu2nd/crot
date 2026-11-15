@@ -6,7 +6,8 @@ export interface KV {
   set(key: string, value: string, mode: 'PX', ms: number): Promise<unknown>
 }
 
-export type CacheState = 'hit' | 'stale' | 'miss'
+/** fallback = cache kosong tapi ada data lokal (PostgreSQL) yang dilayani langsung sambil di-refresh di background */
+export type CacheState = 'hit' | 'stale' | 'miss' | 'fallback'
 export interface Ttl {
   fresh: number
   stale: number
@@ -21,6 +22,8 @@ interface Envelope<T> {
  *  - fresh  : langsung dipakai
  *  - stale  : dipakai langsung, di-refresh di background
  *  - gagal  : jika loader error dan masih ada data stale, data stale dipakai
+ *  - kosong : jika `fallback` (mis. baca dari PostgreSQL) menghasilkan data, itu dilayani langsung dan
+ *             loader jalan di background -> tetap cepat setelah Redis di-restart / TTL habis
  * Redis mati -> cache dilewati (layanan tetap jalan).
  */
 export class Cache {
@@ -31,12 +34,22 @@ export class Cache {
     private readonly log: FastifyBaseLogger
   ) {}
 
-  async getOrSet<T>(key: string, ttl: Ttl, load: () => Promise<T>): Promise<{ value: T; state: CacheState }> {
+  async getOrSet<T>(
+    key: string,
+    ttl: Ttl,
+    load: () => Promise<T>,
+    fallback?: () => Promise<T | null>
+  ): Promise<{ value: T; state: CacheState }> {
     const env = await this.read<T>(key)
     if (env && Date.now() < env.f) return { value: env.v, state: 'hit' }
     if (env) {
       void this.refresh(key, ttl, load).catch(() => {})
       return { value: env.v, state: 'stale' }
+    }
+    const local = fallback ? await fallback().catch(() => null) : null
+    if (local) {
+      void this.refresh(key, ttl, load).catch(() => {})
+      return { value: local, state: 'fallback' }
     }
     return { value: await this.refresh(key, ttl, load), state: 'miss' }
   }

@@ -22,6 +22,10 @@ export const config = {
   providers: [...PROVIDER_KEYS].sort((a, b) => ['shinigami', 'manta', 'lumos'].indexOf(a) - ['shinigami', 'manta', 'lumos'].indexOf(b)),
   rateLimitMax: 120,
   aggregateTimeoutMs: 8000,
+  /** Daftar (latest/search): setelah provider PERTAMA menjawab dengan data, provider lain yang lambat hanya ditunggu sebatas ini (ms). 0 = tunggu semua. */
+  listGraceMs: 2500,
+  /** Saat satu chapter dibuka, chapter berikutnya diambil lebih dulu di background (baca lanjut = instan). */
+  prefetchNextChapter: true,
   primaryTimeoutMs: 12000,
   warmer: { enabled: true, intervalMs: 600_000, enrich: 5 },
   /** fresh = dilayani langsung, stale = dilayani + refresh background / saat upstream gagal */

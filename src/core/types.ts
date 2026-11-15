@@ -106,6 +106,8 @@ export interface Store {
   syncProviders(list: { key: string; name: string; baseUrl: string }[]): Promise<void>
   saveSummaries(items: SeriesSummary[]): Promise<void>
   saveDetail(d: SeriesDetail): Promise<void>
+  /** Detail lengkap (dengan chapter) dari data tersimpan; null jika belum pernah diambil / belum ada chapter. */
+  detailLocal(provider: ProviderKey, ref: string): Promise<SeriesDetail | null>
   findSeries(provider: ProviderKey, ref: string): Promise<{ title: string; normTitle: string } | null>
   siblings(normTitle: string, exclude: ProviderKey): Promise<{ provider: ProviderKey; ref: string }[]>
   findChapter(provider: ProviderKey, ref: string): Promise<{ seriesRef: string; number: string } | null>

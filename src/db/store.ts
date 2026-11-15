@@ -198,6 +198,36 @@ export class PgStore implements Store {
     })
   }
 
+  async detailLocal(provider: ProviderKey, ref: string): Promise<SeriesDetail | null> {
+    const { rows } = await this.pool.query<Row>(
+      'SELECT * FROM series WHERE provider = $1 AND ref = $2 AND detail_fetched_at IS NOT NULL',
+      [provider, ref]
+    )
+    const s = rows[0]
+    if (!s) return null
+    const [[base], chapters] = await Promise.all([
+      this.hydrate([s]),
+      this.pool.query<Row>(
+        'SELECT ref, number_text, title, released_at FROM chapters WHERE series_id = $1 ORDER BY number DESC NULLS LAST, id DESC',
+        [s.id]
+      )
+    ])
+    if (!base || !chapters.rows.length) return null
+    return {
+      ...base,
+      synopsis: s.synopsis ?? '',
+      author: s.author ?? '',
+      artist: s.artist ?? '',
+      year: s.year ?? null,
+      chapters: chapters.rows.map((c: Row) => ({
+        id: `${provider}:${c.ref}`,
+        number: c.number_text as string,
+        title: (c.title ?? '') as string,
+        date: c.released_at ? new Date(c.released_at).toISOString() : null
+      }))
+    }
+  }
+
   async findSeries(provider: ProviderKey, ref: string) {
     const { rows } = await this.pool.query<Row>('SELECT title, norm_title FROM series WHERE provider = $1 AND ref = $2', [provider, ref])
     return rows[0] ? { title: rows[0].title as string, normTitle: rows[0].norm_title as string } : null

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { CircuitBreaker } from '../src/core/breaker.js'
 import { Cache } from '../src/core/cache.js'
+import { ViewCounter } from '../src/services/views.js'
 import { ValidationError } from '../src/core/errors.js'
 import { parseId } from '../src/core/ids.js'
 import { isoDate, memo, normTitle, slugify, splitOnce, withDeadline } from '../src/core/util.js'
@@ -98,5 +99,43 @@ describe('Cache (SWR + singleflight)', () => {
     const broken = { get: async () => { throw new Error('down') }, set: async () => { throw new Error('down') } }
     const c = new Cache(broken as any, noopLog)
     assert.deepEqual(await c.getOrSet('k', ttl, async () => 7), { value: 7, state: 'miss' })
+  })
+})
+
+describe('Cache fallback (data lokal saat cache kosong)', () => {
+  const ttl = { fresh: 30, stale: 5000 }
+  it('miss + fallback -> dilayani fallback, loader jalan di background lalu cache terisi', async () => {
+    const c = new Cache(new MemoryKV(), noopLog)
+    const r = await c.getOrSet('k', ttl, async () => 'upstream', async () => 'lokal')
+    assert.deepEqual(r, { value: 'lokal', state: 'fallback' })
+    await new Promise(r => setTimeout(r, 10))
+    assert.deepEqual(await c.getOrSet('k', ttl, async () => 'x', async () => 'lokal'), { value: 'upstream', state: 'hit' })
+  })
+  it('fallback null / error -> perilaku biasa (tunggu loader)', async () => {
+    const c = new Cache(new MemoryKV(), noopLog)
+    assert.deepEqual(await c.getOrSet('a', ttl, async () => 1, async () => null), { value: 1, state: 'miss' })
+    assert.deepEqual(await c.getOrSet('b', ttl, async () => 2, async () => { throw new Error('db') }), { value: 2, state: 'miss' })
+  })
+  it('loader background gagal -> tidak melempar, fallback tetap dilayani', async () => {
+    const c = new Cache(new MemoryKV(), noopLog)
+    const r = await c.getOrSet('k', ttl, async () => { throw new Error('down') }, async () => 'lokal')
+    assert.equal(r.value, 'lokal')
+    await new Promise(r => setTimeout(r, 10))
+    assert.equal((await c.getOrSet('k', ttl, async () => { throw new Error('down') }, async () => 'lokal')).value, 'lokal')
+  })
+})
+
+describe('ViewCounter', () => {
+  it('hit tidak hilang jika database gagal saat flush; terkirim di flush berikutnya', async () => {
+    const sent: { provider: string; ref: string; n: number }[][] = []
+    let fail = true
+    const v = new ViewCounter({ addViews: async rows => { if (fail) throw new Error('db down'); sent.push(rows as any) } }, noopLog)
+    v.hit('manta', '1'); v.hit('manta', '1'); v.hit('lumos', 'x')
+    await v.flush()
+    v.hit('manta', '1')
+    fail = false
+    await v.flush()
+    assert.equal(sent.length, 1)
+    assert.deepEqual(sent[0].map(r => `${r.provider}:${r.ref}:${r.n}`).sort(), ['lumos:x:1', 'manta:1:3'])
   })
 })

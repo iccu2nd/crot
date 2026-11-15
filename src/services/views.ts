@@ -34,6 +34,13 @@ export class ViewCounter {
       await this.store.addViews(rows)
     } catch (e) {
       this.log.warn({ err: (e as Error).message }, 'flush views failed')
+      // Kembalikan ke buffer supaya hit tidak hilang saat database sempat bermasalah (dibatasi agar memori aman).
+      for (const r of rows) {
+        const key = `${r.provider}\0${r.ref}`
+        const cur = this.buf.get(key)
+        if (cur) cur.n += r.n
+        else if (this.buf.size < 5000) this.buf.set(key, r)
+      }
     }
   }
 

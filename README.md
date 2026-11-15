@@ -70,8 +70,18 @@ Tanpa `ADMIN_TOKEN` endpoint admin tidak ada; kelola langsung lewat SQL (`INSERT
 | Home › pengumuman | `/announcements` |
 | Explore (genre, urutkan, format, status) | `/genres`, `/genres/:slug/series?sort&type&status`, `/latest?type`, `/popular` |
 | Cari | `/search` |
-| Detail & rekomendasi | `/series/:id`, `/popular` |
+| Detail (info + chapter) | `/series/:id` |
 | Reader | `/chapters/:id` (+ `imageHeaders`), `/providers` (header gambar) |
+
+## Kecepatan (penyesuaian untuk MiToon)
+- **Detail dari PostgreSQL saat cache kosong**: seri yang pernah dibuka tersimpan lengkap (sinopsis + chapter) di database. Jika Redis kosong (restart / TTL habis),
+  `/series/:id` langsung dijawab dari PostgreSQL (`meta.source = "db"`) sementara data terbaru diambil di background. Tidak aktif di mode serverless (Vercel).
+- **Daftar tidak menunggu provider paling lambat**: untuk `/latest` dan `/search`, setelah satu provider menjawab dengan data, provider lain hanya ditunggu
+  `listGraceMs` (default 2500 ms, `src/config.ts`). Yang belum selesai ditandai `timeout` di `meta.providers`, tetap lanjut di background dan masuk cache,
+  jadi permintaan berikutnya sudah lengkap. `listGraceMs: 0` = selalu tunggu semua provider seperti sebelumnya.
+- **Prefetch chapter berikutnya**: saat `/chapters/:id` dibuka, chapter `next` diambil lebih dulu di background (`prefetchNextChapter` di `src/config.ts`) sehingga "lanjut baca" langsung dari cache.
+- **View counter** tidak lagi kehilangan hit saat database sempat gagal; hit dikirim ulang pada flush berikutnya.
+- Catatan VPS: Redis di `docker-compose.yml` tanpa persistensi (`--save ""`); berkat fallback PostgreSQL di atas, restart Redis tidak lagi membuat halaman detail lambat.
 
 ## Fallback
 - **List (search/latest)**: semua provider dipanggil paralel dengan batas waktu; yang gagal dilewati (`meta.degraded`, `meta.providers`). Jika semuanya gagal → cache stale → data terakhir di PostgreSQL.

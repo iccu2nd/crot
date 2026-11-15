@@ -48,11 +48,15 @@ export interface PageQuery {
   provider?: ProviderKey
 }
 
-type ServiceConfig = Pick<Config, 'ttl' | 'aggregateTimeoutMs' | 'primaryTimeoutMs'> & { serverless?: boolean }
+type ServiceConfig = Pick<Config, 'ttl' | 'aggregateTimeoutMs' | 'primaryTimeoutMs'> & {
+  serverless?: boolean
+  listGraceMs?: number
+  prefetchNextChapter?: boolean
+}
 const offsetOf = (q: PageQuery) => (q.page - 1) * q.limit
 const dbPage = (q: PageQuery): DbPage => ({ limit: q.limit, offset: offsetOf(q), provider: q.provider })
 const sameNumber = (a: string, b: string) => (Number.isFinite(+a) && Number.isFinite(+b) ? +a === +b : a === b)
-const stateToSource = (s: CacheState): DataSource => (s === 'hit' ? 'cache' : s === 'stale' ? 'stale' : 'upstream')
+const stateToSource = (s: CacheState): DataSource => (s === 'hit' ? 'cache' : s === 'stale' ? 'stale' : s === 'fallback' ? 'db' : 'upstream')
 
 function statusOf(e: unknown): ProviderStatus {
   if (e instanceof TimeoutError) return 'timeout'
@@ -94,6 +98,36 @@ export function mergeSeries(lists: SeriesSummary[][]): SeriesSummary[] {
     }
   }
   return out
+}
+
+/**
+ * Tunggu semua task, KECUALI: begitu satu task "bagus" (`good`) selesai, sisanya hanya ditunggu `graceMs` lagi.
+ * Task yang belum selesai diganti `timedOut(i)`; task aslinya tetap jalan (mengisi cache untuk request berikutnya).
+ * graceMs <= 0 = tunggu semua. Task tidak boleh reject (tangkap error di dalamnya).
+ */
+export function settleWithGrace<T>(tasks: Promise<T>[], graceMs: number, good: (v: T) => boolean, timedOut: (i: number) => T): Promise<T[]> {
+  return new Promise(resolve => {
+    const out: (T | undefined)[] = new Array(tasks.length).fill(undefined)
+    const have: boolean[] = new Array(tasks.length).fill(false)
+    let left = tasks.length
+    let timer: NodeJS.Timeout | undefined
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve(out.map((v, i) => (have[i] ? (v as T) : timedOut(i))))
+    }
+    if (!left) return finish()
+    tasks.forEach((t, i) =>
+      t.then(v => {
+        out[i] = v
+        have[i] = true
+        if (--left === 0) return finish()
+        if (graceMs > 0 && !timer && good(v)) timer = setTimeout(finish, graceMs)
+      })
+    )
+  })
 }
 
 export class ScraperService {
@@ -192,15 +226,20 @@ export class ScraperService {
     run: (p: ProviderAdapter) => Promise<{ value: SeriesSummary[]; state: CacheState }>,
     local: () => Promise<SeriesSummary[]>
   ): Promise<ListResult> {
-    const settled = await Promise.all(
-      this.pick(q.provider).map(async p => {
+    type Outcome = { key: ProviderKey; items: SeriesSummary[]; state: CacheState | null; status: ProviderStatus; error?: string }
+    const pending = this.pick(q.provider)
+    const settled = await settleWithGrace<Outcome>(
+      pending.map(async (p): Promise<Outcome> => {
         try {
           const r = await withDeadline(run(p), this.o.cfg.aggregateTimeoutMs)
-          return { key: p.key, items: r.value, state: r.state, status: (r.state === 'stale' ? 'stale' : 'ok') as ProviderStatus }
+          return { key: p.key, items: r.value, state: r.state, status: r.state === 'stale' ? 'stale' : 'ok' }
         } catch (e) {
-          return { key: p.key, items: [] as SeriesSummary[], state: null, status: statusOf(e), error: (e as Error)?.message }
+          return { key: p.key, items: [], state: null, status: statusOf(e), error: (e as Error)?.message }
         }
-      })
+      }),
+      this.o.cfg.listGraceMs ?? 0,
+      o => o.state !== null && o.items.length > 0,
+      i => ({ key: pending[i].key, items: [], state: null, status: 'timeout' })
     )
     const providers = Object.fromEntries(settled.map(r => [r.key, r.status]))
     const alive = settled.filter(r => r.state)
@@ -309,15 +348,32 @@ export class ScraperService {
   // ------------------------------------------------------------------ detail & chapter (dengan fallback)
 
   private detailFrom(p: ProviderAdapter, ref: string) {
-    return this.o.cache.getOrSet<SeriesDetail>(`d:${p.key}:${ref}`, this.o.cfg.ttl.detail, async () => {
-      const d = await this.call(p, () => p.detail(ref))
-      await this.background(this.o.store.saveDetail(d), 'saveDetail')
-      return d
-    })
+    return this.o.cache.getOrSet<SeriesDetail>(
+      `d:${p.key}:${ref}`,
+      this.o.cfg.ttl.detail,
+      async () => {
+        const d = await this.call(p, () => p.detail(ref))
+        await this.background(this.o.store.saveDetail(d), 'saveDetail')
+        return d
+      },
+      // Cache kosong (Redis restart / TTL habis) tapi seri pernah diambil -> langsung dari PostgreSQL, refresh di background.
+      // Di serverless proses dibekukan setelah respons, jadi refresh background tidak bisa diandalkan -> tanpa fallback.
+      this.o.cfg.serverless ? undefined : () => this.o.store.detailLocal(p.key, ref)
+    )
   }
 
   private chapterFrom(p: ProviderAdapter, ref: string) {
     return this.o.cache.getOrSet<ChapterContent>(`c:${p.key}:${ref}`, this.o.cfg.ttl.chapter, () => this.call(p, () => p.chapter(ref)))
+  }
+
+  /** Ambil chapter berikutnya di background supaya "lanjut baca" langsung dari cache. Kegagalan diabaikan. */
+  private prefetchChapter(nextId: string | null) {
+    if (!nextId || this.o.cfg.serverless || this.o.cfg.prefetchNextChapter === false) return
+    try {
+      const { provider, ref } = parseId(nextId)
+      const a = this.adapters.get(provider)
+      if (a && this.breakers.get(provider)!.available) void this.chapterFrom(a, ref).catch(() => {})
+    } catch {}
   }
 
   /** Dipakai warmer: isi cache + DB tanpa menghitung view dan tanpa fallback. */
@@ -380,6 +436,7 @@ export class ScraperService {
     let failure: unknown
     try {
       const r = await withDeadline(this.chapterFrom(primary, ref), this.o.cfg.primaryTimeoutMs)
+      this.prefetchChapter(r.value.next)
       return { data: r.value, meta: { provider, requestedId: id, fallback: false, source: stateToSource(r.state) } }
     } catch (e) {
       failure = e
