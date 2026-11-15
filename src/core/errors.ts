@@ -13,6 +13,11 @@ export class ValidationError extends AppError {
     super(400, 'BAD_REQUEST', message)
   }
 }
+export class UnauthorizedError extends AppError {
+  constructor(message = 'Token admin tidak valid') {
+    super(401, 'UNAUTHORIZED', message)
+  }
+}
 export class NotFoundError extends AppError {
   constructor(message = 'Not found') {
     super(404, 'NOT_FOUND', message)

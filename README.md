@@ -9,7 +9,7 @@ docker compose up --build          # API di :3000, dokumentasi di /docs
 # atau lokal:
 cp .env.example .env && npm install && npm run build && npm start
 ```
-Migration otomatis saat start, atau manual `npm run migrate`. Env yang dipakai hanya `DATABASE_URL` dan `REDIS_URL`; pengaturan lain (TTL, rate limit, prioritas provider) ada di `src/config.ts`.
+Migration otomatis saat start, atau manual `npm run migrate`. Env wajib hanya `DATABASE_URL` dan `REDIS_URL`; `ADMIN_TOKEN` opsional (mengaktifkan endpoint admin pengumuman). Pengaturan lain (TTL, rate limit, prioritas provider) ada di `src/config.ts`.
 
 **Verifikasi scraper ke situs asli (wajib dijalankan sekali di jaringan Anda):**
 ```bash
@@ -25,7 +25,7 @@ Vercel tidak menjalankan server permanen, jadi proyek memakai `api/index.js` + `
 tanpa timer latar/warmer, penulisan DB dilakukan inline, tanpa migrate saat runtime.
 
 1. Siapkan **PostgreSQL terkelola** (Neon / Supabase / Vercel Postgres, pakai URL *pooled*) dan **Redis** (Upstash, URL `rediss://...`).
-2. Di Vercel → Settings → Environment Variables (centang Production **dan Build**): hanya `DATABASE_URL` (akhiri `?sslmode=require`) dan `REDIS_URL`. Tidak ada env lain.
+2. Di Vercel → Settings → Environment Variables (centang Production **dan Build**): `DATABASE_URL` (akhiri `?sslmode=require`) dan `REDIS_URL`. Opsional: `ADMIN_TOKEN` untuk mengelola pengumuman.
 3. Deploy. Build menjalankan `npm run build && npm run migrate` (migration otomatis saat deploy).
 4. Buka `/docs`. Jika masih 500, lihat `vercel logs <request-id>`; penyebab tersering: `DATABASE_URL`/`REDIS_URL` belum diisi atau salah.
 
@@ -35,13 +35,14 @@ Catatan: cold start sedikit lebih lambat (koneksi DB/Redis). Untuk performa terb
 | Endpoint | Fungsi |
 |---|---|
 | `GET /search?q=&page=&limit=&provider=` | cari di semua provider |
-| `GET /latest?page=&limit=&provider=&type=` | update terbaru (`type` = comic/manga/novel, hanya Manta) |
+| `GET /latest?page=&limit=&provider=&type=` | update terbaru (`type` = comic/manga/novel; Manta memfilter di upstream, provider lain difilter dari tipe tiap seri) |
 | `GET /popular?days=7&page=&limit=` | populer (lihat catatan) |
 | `GET /genres` | daftar genre (DB + genre native Lumos) |
 | `GET /genres/:slug/series?sort=&type=&status=` | seri per genre; `sort` = latest/popular/rating/az, `type` (format) = manga/manhwa/manhua/comic/novel, `status` = ongoing/completed/hiatus |
 | `GET /series/:id` | detail + daftar chapter |
 | `GET /series/:id/chapters` | daftar chapter |
 | `GET /chapters/:id` | gambar chapter + `imageHeaders` |
+| `GET /announcements` | pengumuman aktif untuk aplikasi (maks. 5, terbaru dulu) |
 | `GET /providers` | status provider, circuit breaker, header gambar |
 | `GET /health` | cek PostgreSQL & Redis |
 
@@ -49,6 +50,28 @@ Catatan: cold start sedikit lebih lambat (koneksi DB/Redis). Untuk performa terb
 Id chapter: `shinigami:<chapterId>`, `manta:<seri>:<episode>`, `lumos:<slug>:<chapter-slug>` — ambil dari `chapters[].id`.
 Sukses: `{ data, meta }`. Error: `{ error: { code, message } }`.
 Unduh gambar dengan header dari `imageHeaders` (referer wajib untuk provider tertentu).
+
+## Pengumuman (untuk aplikasi MiToon)
+Aplikasi menampilkan `GET /v1/announcements` di Home (`{ data: [{ id, title, body, url }] }`; bagian disembunyikan bila kosong).
+Data ada di tabel `announcements` (migration `002`). Jika `ADMIN_TOKEN` diisi, tersedia endpoint admin (tidak tampil di `/docs`, dibatasi 10 request/menit):
+```bash
+# tambah (expiresAt opsional, ISO-8601)
+curl -X POST https://API-KAMU/v1/admin/announcements -H "x-admin-token: $ADMIN_TOKEN" -H "content-type: application/json" \
+  -d '{"title":"Update 1.1","body":"Perbaikan reader","url":"https://github.com/akun/repo/releases","expiresAt":"2026-12-31T00:00:00Z"}'
+# hapus
+curl -X DELETE https://API-KAMU/v1/admin/announcements/1 -H "x-admin-token: $ADMIN_TOKEN"
+```
+Tanpa `ADMIN_TOKEN` endpoint admin tidak ada; kelola langsung lewat SQL (`INSERT INTO announcements (title, body, url) VALUES (...)`).
+
+## Kontrak dengan aplikasi
+| Layar aplikasi | Endpoint |
+|---|---|
+| Home › Sorotan / Populer / genre, carousel | `/latest`, `/popular`, `/genres/:slug/series`, `/popular?limit=6` |
+| Home › pengumuman | `/announcements` |
+| Explore (genre, urutkan, format, status) | `/genres`, `/genres/:slug/series?sort&type&status`, `/latest?type`, `/popular` |
+| Cari | `/search` |
+| Detail & rekomendasi | `/series/:id`, `/popular` |
+| Reader | `/chapters/:id` (+ `imageHeaders`), `/providers` (header gambar) |
 
 ## Fallback
 - **List (search/latest)**: semua provider dipanggil paralel dengan batas waktu; yang gagal dilewati (`meta.degraded`, `meta.providers`). Jika semuanya gagal → cache stale → data terakhir di PostgreSQL.

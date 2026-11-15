@@ -60,6 +60,14 @@ function statusOf(e: unknown): ProviderStatus {
   return 'error'
 }
 
+/** Provider yang memfilter `type` di sisi upstream (bagian home Manta). Provider lain difilter dari `item.type`. */
+const NATIVE_TYPE_FILTER: ReadonlySet<ProviderKey> = new Set<ProviderKey>(['manta'])
+
+/** Sisakan item bertipe `type` (mis. "manga"); tanpa `type` semua lolos. */
+export function filterByType(items: SeriesSummary[], type?: string): SeriesSummary[] {
+  return type ? items.filter(i => i.type === type) : items
+}
+
 /** Gabungkan hasil beberapa provider: round-robin, deduplikasi judul sama, kumpulkan `sources`. */
 export function mergeSeries(lists: SeriesSummary[][]): SeriesSummary[] {
   const byTitle = new Map<string, SeriesSummary>()
@@ -220,7 +228,16 @@ export class ScraperService {
   }
 
   latest(o: PageQuery & { type?: string }): Promise<ListResult> {
-    return this.fanOut(o, p => this.listFrom(p, 'latest', o), () => this.o.store.latestLocal(dbPage(o)))
+    return this.fanOut(
+      o,
+      async p => {
+        if (NATIVE_TYPE_FILTER.has(p.key)) return this.listFrom(p, 'latest', o)
+        // `type` tidak dikirim ke upstream (cache key tetap satu per halaman), difilter setelahnya.
+        const r = await this.listFrom(p, 'latest', { ...o, type: undefined })
+        return { ...r, value: filterByType(r.value, o.type) }
+      },
+      () => this.o.store.latestLocal(dbPage(o))
+    )
   }
 
   // ------------------------------------------------------------------ DB-backed lists (popular / genre)

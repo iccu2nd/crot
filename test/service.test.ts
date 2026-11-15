@@ -160,3 +160,27 @@ describe('ScraperService detail/chapter fallback', () => {
     await assert.rejects(svc.chapter('shinigami:c2'), { code: 'UPSTREAM_ERROR' })
   })
 })
+
+describe('ScraperService latest: filter type', () => {
+  it('Manta difilter di upstream (type dikirim), provider lain difilter dari item.type (type tidak dikirim)', async () => {
+    const seen: string[] = []
+    const withTypes = (p: ProviderKey, types: (string | null)[]) => {
+      const { a } = adapter(p)
+      a.latest = async o => {
+        seen.push(`${p}:${o.type ?? ''}`)
+        return types.map((t, i) => ({ ...item(p, `${i}`, `${p}-${i}`), type: t }))
+      }
+      return a
+    }
+    const { svc } = make([withTypes('shinigami', ['manga', 'manhwa', null]), withTypes('manta', ['manga', 'manga'])])
+    const r = await svc.latest({ ...q, type: 'manga' })
+    assert.deepEqual(r.data.map(d => d.id).sort(), ['manta:0', 'manta:1', 'shinigami:0'])
+    assert.deepEqual(seen.sort(), ['manta:manga', 'shinigami:'])
+  })
+
+  it('tanpa type: semua item lolos', async () => {
+    const { svc } = make([adapter('shinigami', { titles: ['A', 'B'] }).a])
+    const r = await svc.latest(q)
+    assert.equal(r.data.length, 2)
+  })
+})

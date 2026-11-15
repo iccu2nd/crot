@@ -7,7 +7,7 @@ const hour = (n: number) => n * 3_600_000
 /** true di Vercel (VERCEL=1 otomatis): tanpa timer latar, tulis DB inline, tanpa migrate saat runtime */
 const serverless = env.VERCEL === '1'
 
-/** Hanya DATABASE_URL & REDIS_URL yang perlu diisi; sisanya konstanta. */
+/** Hanya DATABASE_URL & REDIS_URL yang wajib diisi; ADMIN_TOKEN opsional (mengaktifkan endpoint admin pengumuman). */
 export const config = {
   serverless,
   port: Number(env.PORT) || 3000,
@@ -16,6 +16,7 @@ export const config = {
   trustProxy: true,
   databaseUrl: env.DATABASE_URL ?? 'postgres://scraper:scraper@localhost:5432/scraper',
   redisUrl: env.REDIS_URL ?? 'redis://localhost:6379',
+  adminToken: env.ADMIN_TOKEN ?? '',
   pgPoolMax: serverless ? 2 : 10,
   autoMigrate: !serverless,
   providers: [...PROVIDER_KEYS].sort((a, b) => ['shinigami', 'manta', 'lumos'].indexOf(a) - ['shinigami', 'manta', 'lumos'].indexOf(b)),

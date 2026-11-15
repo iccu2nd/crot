@@ -8,6 +8,7 @@ import { after, before, describe, it } from 'node:test'
 import { migrate } from '../src/db/migrate.js'
 import { createPool } from '../src/db/pool.js'
 import { PgStore } from '../src/db/store.js'
+import { AnnouncementRepo } from '../src/services/announcements.js'
 import type { SeriesDetail, SeriesSummary } from '../src/core/types.js'
 
 const url = process.env.TEST_DATABASE_URL
@@ -29,7 +30,7 @@ describe('PgStore', { skip }, () => {
   before(async () => {
     await pool.query('DROP SCHEMA public CASCADE')
     await pool.query('CREATE SCHEMA public')
-    assert.deepEqual(await migrate(pool), ['001_init.sql'])
+    assert.deepEqual(await migrate(pool), ['001_init.sql', '002_announcements.sql'])
     assert.deepEqual(await migrate(pool), [], 'migration idempoten')
     await store.syncProviders([
       { key: 'shinigami', name: 'Shinigami', baseUrl: 'x' },
@@ -110,5 +111,18 @@ describe('PgStore', { skip }, () => {
 
   it('searchLocal kosong untuk query tanpa huruf/angka', async () => {
     assert.deepEqual(await store.searchLocal('!!!', { limit: 5, offset: 0 }), [])
+  })
+
+  it('announcements: hanya yang aktif & belum kedaluwarsa, terbaru dulu; remove idempoten', async () => {
+    const repo = new AnnouncementRepo(pool)
+    const lama = await repo.create({ title: 'Lama' })
+    const baru = await repo.create({ title: 'Baru', body: 'isi', url: 'https://x.id' })
+    await repo.create({ title: 'Kedaluwarsa', expiresAt: '2000-01-01T00:00:00Z' })
+    await pool.query('UPDATE announcements SET active = false WHERE id = $1', [lama.id])
+    const live = await repo.active()
+    assert.deepEqual(live.map(a => a.title), ['Baru'])
+    assert.equal(live[0].url, 'https://x.id')
+    assert.equal(await repo.remove(baru.id), true)
+    assert.equal(await repo.remove(baru.id), false)
   })
 })

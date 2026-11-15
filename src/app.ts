@@ -12,9 +12,11 @@ import { migrate } from './db/migrate.js'
 import { createPool } from './db/pool.js'
 import { PgStore } from './db/store.js'
 import { createProviders } from './providers/index.js'
+import { announcementRoutes } from './routes/announcements.js'
 import { catalogRoutes } from './routes/catalog.js'
 import { seriesRoutes } from './routes/series.js'
 import { systemRoutes } from './routes/system.js'
+import { AnnouncementRepo } from './services/announcements.js'
 import { ScraperService } from './services/scraper.js'
 import { ViewCounter } from './services/views.js'
 import { Warmer } from './services/warmer.js'
@@ -93,7 +95,7 @@ export async function createApp(cfg: Config) {
           'Id unified: `<provider>:<id asli>`. Respons sukses: `{ data, meta }`. Error: `{ error: { code, message } }`.'
       },
       tags: [
-        { name: 'catalog', description: 'Search, latest, popular, genre' },
+        { name: 'catalog', description: 'Search, latest, popular, genre, pengumuman' },
         { name: 'series', description: 'Detail seri & daftar chapter' },
         { name: 'chapters', description: 'Gambar chapter' },
         { name: 'system', description: 'Health & status' }
@@ -133,6 +135,7 @@ export async function createApp(cfg: Config) {
     async v1 => {
       await v1.register(catalogRoutes, { svc })
       await v1.register(seriesRoutes, { svc })
+      await v1.register(announcementRoutes, { repo: new AnnouncementRepo(pool), adminToken: cfg.adminToken })
     },
     { prefix: '/v1' }
   )
