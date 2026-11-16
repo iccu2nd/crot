@@ -11,6 +11,7 @@ import type { ScraperService } from './scraper.js'
  */
 export class Warmer {
   private timer?: NodeJS.Timeout
+  private crawlTimer?: NodeJS.Timeout
   private stopped = false
   private runs = 0
 
@@ -19,22 +20,86 @@ export class Warmer {
     private readonly store: Store,
     private readonly providers: ProviderKey[],
     private readonly log: FastifyBaseLogger,
-    private readonly cfg: { intervalMs: number; enrich: number; maintainEvery?: number }
+    private readonly cfg: {
+      intervalMs: number
+      enrich: number
+      maintainEvery?: number
+      crawl?: { pages: number; size: number; firstDelayMs: number; everyMs: number; enrich: number; seeds: string[] }
+    }
   ) {}
 
   start(firstDelayMs = 5_000) {
     this.schedule(firstDelayMs)
+    if (this.cfg.crawl) this.scheduleCrawl(this.cfg.crawl.firstDelayMs)
   }
 
   stop() {
     this.stopped = true
     clearTimeout(this.timer)
+    clearTimeout(this.crawlTimer)
   }
 
   private schedule(ms: number) {
     if (this.stopped) return
     this.timer = setTimeout(() => void this.run().finally(() => this.schedule(this.cfg.intervalMs)), ms)
     this.timer.unref()
+  }
+
+  private scheduleCrawl(ms: number) {
+    if (this.stopped || !this.cfg.crawl) return
+    this.crawlTimer = setTimeout(() => void this.crawl().finally(() => this.scheduleCrawl(this.cfg.crawl!.everyMs)), ms)
+    this.crawlTimer.unref()
+  }
+
+  /**
+   * Isi DB dalam-dalam supaya filter genre berisi banyak seri dari semua sumber:
+   *  - tiap provider: halaman latest 1..N (berhenti saat kosong) -> semua seri + genre dari list tersimpan
+   *  - seed pencarian per nama genre (Manta tidak punya halaman/genre native) -> seri ber-tag genre itu
+   *  - Lumos: browse native per genre dasar, beberapa halaman
+   *  - perkaya detail seri yang belum punya genre (Shinigami/Lumos list tanpa genre)
+   * Pelan & berurutan (jeda antar request) supaya upstream tidak terbebani.
+   */
+  async crawl() {
+    const c = this.cfg.crawl
+    if (!c) return
+    const pause = () => new Promise(r => setTimeout(r, 300))
+    const count = (r: unknown) => (r as { data?: unknown[] } | null)?.data?.length ?? 0
+    let saved = 0
+    for (const provider of this.providers) {
+      for (let page = 1; page <= c.pages && !this.stopped; page++) {
+        const r = await this.svc.latest({ page, limit: c.size, provider }).catch(() => null)
+        const n = count(r)
+        saved += n
+        if (n === 0) break
+        await pause()
+      }
+      for (const q of c.seeds) {
+        if (this.stopped) return
+        saved += count(await this.svc.search(q, { page: 1, limit: c.size, provider }).catch(() => null))
+        await pause()
+      }
+    }
+    for (const slug of c.seeds.map(s => s.replace(/[^a-z0-9]+/g, '-'))) {
+      for (let page = 1; page <= 3 && !this.stopped; page++) {
+        const r = await this.svc.byGenre(slug, { page, limit: c.size }).catch(() => null)
+        if (count(r) === 0) break
+        await pause()
+      }
+    }
+    // Detail untuk seri tanpa genre: 4 worker paralel.
+    try {
+      const queue = await this.store.needingDetail(c.enrich)
+      await Promise.all(
+        Array.from({ length: 4 }, async () => {
+          for (let it = queue.shift(); it && !this.stopped; it = queue.shift()) {
+            await this.svc.refreshDetail(it.provider, it.ref).catch(() => undefined)
+          }
+        })
+      )
+    } catch (e) {
+      this.log.warn({ err: (e as Error).message }, 'crawl enrich failed')
+    }
+    this.log.info({ saved }, 'catalog crawl done')
   }
 
   /** Daftar yang diminta app saat dibuka (limit 12 & 6 = persis query Home/Explore) dipanaskan terus -> request pertama user selalu kena cache. */

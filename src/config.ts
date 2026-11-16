@@ -17,6 +17,12 @@ export const config = {
   databaseUrl: env.DATABASE_URL ?? 'postgres://scraper:scraper@localhost:5432/scraper',
   redisUrl: env.REDIS_URL ?? 'redis://localhost:6379',
   adminToken: env.ADMIN_TOKEN ?? '',
+  /** Akun & login. JWT_SECRET wajib diisi di produksi; Google aktif hanya bila GOOGLE_CLIENT_ID diisi. */
+  auth: {
+    jwtSecret: env.JWT_SECRET ?? '',
+    tokenTtlSec: 90 * 24 * 3600,
+    googleClientId: env.GOOGLE_CLIENT_ID ?? '',
+  },
   pgPoolMax: serverless ? 2 : 10,
   autoMigrate: !serverless,
   providers: [...PROVIDER_KEYS].sort((a, b) => ['shinigami', 'manta', 'lumos'].indexOf(a) - ['shinigami', 'manta', 'lumos'].indexOf(b)),
@@ -27,7 +33,14 @@ export const config = {
   /** Saat satu chapter dibuka, chapter berikutnya diambil lebih dulu di background (baca lanjut = instan). */
   prefetchNextChapter: true,
   primaryTimeoutMs: 12000,
-  warmer: { enabled: true, intervalMs: 90_000, enrich: 5, maintainEvery: 6 },
+  warmer: {
+    enabled: true,
+    intervalMs: 90_000,
+    enrich: 15,
+    maintainEvery: 6,
+    /** Crawler katalog: genre hanya dibaca dari DB, jadi DB diisi dalam-dalam (banyak halaman tiap sumber) supaya filter genre berisi banyak seri. */
+    crawl: { pages: 15, size: 50, firstDelayMs: 30_000, everyMs: hour(6), enrich: 40, seeds: ['action', 'adventure', 'comedy', 'drama', 'fantasy', 'horror', 'isekai', 'martial arts', 'mystery', 'romance', 'school life', 'sci-fi', 'slice of life', 'supernatural'] }
+  },
   /** fresh = dilayani langsung, stale = dilayani + refresh background / saat upstream gagal */
   ttl: {
     search: { fresh: min(5), stale: hour(1) },

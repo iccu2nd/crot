@@ -49,3 +49,13 @@ export function normalizeError(e: unknown): AppError | Error {
   if (err?.name === 'TimeoutError' || err?.name === 'AbortError') return new TimeoutError()
   return new UpstreamError(err?.message || 'Upstream failure')
 }
+export class ConflictError extends AppError {
+  constructor(message: string) {
+    super(409, 'CONFLICT', message)
+  }
+}
+export class NotConfiguredError extends AppError {
+  constructor(message: string) {
+    super(501, 'NOT_CONFIGURED', message)
+  }
+}

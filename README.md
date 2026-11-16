@@ -110,3 +110,19 @@ sehingga genre Lumos ikut lengkap. Sortir & filter akhir dikerjakan SQL agar kon
   (list Shinigami/Manta memuat genre; Lumos diisi saat genre dibuka lewat `/browse` live, atau dari halaman detail oleh warmer). Keduanya makin lengkap seiring pemakaian.
 - `limit` berlaku per provider; Lumos `latest` memakai ukuran halaman upstream.
 - `date` chapter dinormalkan ke ISO-8601; Lumos tidak menyediakan tanggal.
+
+
+## Akun & login
+
+Aplikasi mewajibkan login: username/email + password, atau **Masuk dengan Google**. Endpoint (`/v1/auth/*`, tampil di `/docs`): `register`, `login`, `google`, `me`, dan `config` (memberi tahu app apakah tombol Google aktif, jadi **tidak perlu build ulang APK** saat Google diaktifkan). Tabel `users` dibuat otomatis (migration `003`). Password disimpan sebagai hash scrypt; token login = JWT HS256 berlaku 90 hari. Endpoint katalog tetap publik.
+
+Env: `JWT_SECRET` (**wajib** di produksi; `openssl rand -hex 32`) dan, opsional untuk Google:
+
+- Isi `GOOGLE_CLIENT_ID` dengan OAuth client type *Web* (Google Cloud Console). Buat juga satu client type *Android* (package `id.mitoon.app` + SHA-1 keystore rilis APK). APK harus ditandatangani keystore yang **tetap** (secret `KEYSTORE_*` di GitHub), kalau tidak SHA-1 berubah tiap build dan Google menolak.
+
+## Profil & komentar
+
+Migration `004` menambah foto profil dan tabel `comments`.
+
+- **Foto profil:** `PUT /v1/auth/me/avatar` (body mentah `image/jpeg`, maks. 300 KB; app memotong persegi & mengecilkan ke 384 px sebelum upload), `DELETE /v1/auth/me/avatar`, dan `GET /v1/users/:id/avatar?v=<avatarV>` (publik, di-cache lama; `v` berubah tiap ganti foto). Foto disimpan di PostgreSQL (kolom `bytea`), jadi tidak butuh disk/S3.
+- **Komentar:** `GET /v1/comments?target=…&limit=…&before=…` (publik), `POST /v1/comments` dan `DELETE /v1/comments/:id` (wajib login; hanya penulis yang bisa menghapus). `target` = `s:<id seri>` (halaman detail) atau `c:<id chapter>` (reader). Komentar maks. 1000 karakter, kiriman dibatasi 10/menit per IP. Belum ada moderasi/balasan; hapus komentar bermasalah lewat SQL (`DELETE FROM comments WHERE id = …`).

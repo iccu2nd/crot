@@ -6,6 +6,8 @@ services:
       DATABASE_URL: postgres://scraper:scraper@postgres:5432/scraper
       REDIS_URL: redis://redis:6379
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
