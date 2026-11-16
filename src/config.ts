@@ -27,7 +27,7 @@ export const config = {
   /** Saat satu chapter dibuka, chapter berikutnya diambil lebih dulu di background (baca lanjut = instan). */
   prefetchNextChapter: true,
   primaryTimeoutMs: 12000,
-  warmer: { enabled: true, intervalMs: 600_000, enrich: 5 },
+  warmer: { enabled: true, intervalMs: 90_000, enrich: 5, maintainEvery: 6 },
   /** fresh = dilayani langsung, stale = dilayani + refresh background / saat upstream gagal */
   ttl: {
     search: { fresh: min(5), stale: hour(1) },

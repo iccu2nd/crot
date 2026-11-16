@@ -26,7 +26,9 @@ export async function createApp(cfg: Config) {
   const app = Fastify({
     logger: { level: cfg.logLevel },
     trustProxy: cfg.trustProxy,
-    maxParamLength: 300
+    maxParamLength: 300,
+    keepAliveTimeout: 65_000, // > idle timeout proxy (Railway/Nginx ~60s): koneksi dipakai ulang, tanpa handshake TLS ulang
+    connectionTimeout: 30_000
   })
   const log = app.log
 
