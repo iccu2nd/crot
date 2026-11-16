@@ -22,24 +22,32 @@ export const commentRoutes: FastifyPluginAsync<{ auth: AuthService; comments: Co
     },
     async (req, reply) => {
       const q = req.query as { target: string; limit?: number; before?: number }
+      const authHeader = req.headers.authorization; const viewer = authHeader ? await auth.me(authHeader).catch(() => null) : null
       void reply.header('cache-control', 'no-store')
-      return { data: await comments.list(q.target, q.limit ?? 20, q.before) }
+      return { data: await comments.list(q.target, q.limit ?? 20, q.before, viewer?.id ?? null) }
     }
   )
 
   app.post(
     '/comments',
     {
-      schema: { tags: ['comments'], summary: 'Kirim komentar (wajib login)', body: { type: 'object', required: ['target', 'body'], properties: { target: { type: 'string', maxLength: 330 }, body: { type: 'string', maxLength: 4000 } } } },
+      schema: { tags: ['comments'], summary: 'Kirim komentar (wajib login)', body: { type: 'object', required: ['target', 'body'], properties: { target: { type: 'string', maxLength: 330 }, body: { type: 'string', maxLength: 4000 }, parentId: { type: 'integer', minimum: 1 } } } },
       config: limit(10)
     },
     async (req, reply) => {
       const user = await auth.me(req.headers.authorization)
-      const b = req.body as { target: string; body: string }
+      const b = req.body as { target: string; body: string; parentId?: number }
+      const item = await comments.add(user.id, b.target, b.body, b.parentId)
+      await auth.awardXp(user.id, `comment:${item.id}`, b.parentId ? 4 : 8)
       void reply.header('cache-control', 'no-store')
-      return { data: await comments.add(user.id, b.target, b.body) }
+      return { data: item }
     }
   )
+
+  app.post('/comments/:id/reaction', { schema: { tags: ['comments'], summary: 'Like/dislike komentar', body: { type: 'object', required: ['kind'], properties: { kind: { type: ['string','null'], enum: ['like','dislike',null] } } } }, config: limit(60) }, async (req, reply) => {
+    const user = await auth.me(req.headers.authorization); const id = Number((req.params as {id:string}).id); const b = req.body as {kind:'like'|'dislike'|null}
+    const data = await comments.react(user.id,id,b.kind); void reply.header('cache-control','no-store'); return {data}
+  })
 
   app.delete(
     '/comments/:id',

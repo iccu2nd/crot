@@ -9,12 +9,20 @@ export interface AuthUser {
   username: string
   /** versi foto profil (0 = belum ada); dipakai app untuk URL /users/:id/avatar?v= */
   avatarV: number
+  displayName: string
+  xp: number
+  level: number
+  xpToNextLevel: number
+  usernameNextChangeAt: number | null
 }
 export interface AuthResult {
   token: string
   user: AuthUser
 }
 type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }
+
+export function xpForLevel(level: number): number { return Math.max(0, Math.floor((level - 1) * (100 + level * 35) / 2)) }
+export function levelForXp(xp: number): number { let level = 1; while (level < 999 && xp >= xpForLevel(level + 1)) level++; return level }
 
 const BAD_LOGIN = 'Username/email atau password salah'
 
@@ -40,8 +48,9 @@ export class AuthService {
     return this.cfg.googleClientId || null
   }
 
-  private issue(u: { id: number; username: string; avatarV?: number }): AuthResult {
-    return { token: signToken(u.id, this.secret, this.cfg.tokenTtlSec), user: { id: u.id, username: u.username, avatarV: u.avatarV ?? 0 } }
+  private issue(u: any): AuthResult {
+    const xp = Number(u.xp ?? 0); const level = levelForXp(xp)
+    return { token: signToken(u.id, this.secret, this.cfg.tokenTtlSec), user: { id: u.id, username: u.username, avatarV: u.avatarV ?? 0, displayName: u.displayName || u.username, xp, level, xpToNextLevel: xpForLevel(level + 1), usernameNextChangeAt: u.usernameNextChangeAt ? new Date(u.usernameNextChangeAt).getTime() : null } }
   }
 
   // ------------------------------------------------------------------ password
@@ -54,7 +63,7 @@ export class AuthService {
     if (bad) throw new ValidationError(bad)
     const hash = await hashPassword(password)
     try {
-      const { rows } = await this.pool.query('INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV"', [username, email, hash])
+      const { rows } = await this.pool.query(`INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, display_name AS "displayName", xp, username_changed_at + interval '7 days' AS "usernameNextChangeAt", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV"`, [username, email, hash])
       return this.issue(rows[0])
     } catch (e) {
       const err = e as { code?: string; constraint?: string }
@@ -67,7 +76,7 @@ export class AuthService {
     identifier = String(identifier ?? '').trim()
     password = String(password ?? '')
     if (!identifier || !password || password.length > 128) throw new UnauthorizedError(BAD_LOGIN)
-    const { rows } = await this.pool.query('SELECT id, username, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", password_hash FROM users WHERE lower(username) = lower($1) OR lower(email) = lower($1) LIMIT 1', [identifier])
+    const { rows } = await this.pool.query(`SELECT id, username, display_name AS "displayName", xp, username_changed_at + interval '7 days' AS "usernameNextChangeAt", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", password_hash FROM users WHERE lower(username) = lower($1) OR lower(email) = lower($1) LIMIT 1`, [identifier])
     const row = rows[0] as { id: number; username: string; avatarV: number; password_hash: string | null } | undefined
     this.dummyHash ??= hashPassword('dummy-password-for-timing')
     const ok = await verifyPassword(password, row?.password_hash ?? (await this.dummyHash))
@@ -80,23 +89,51 @@ export class AuthService {
     const m = /^Bearer (.+)$/.exec(authorization ?? '')
     const claims = m ? verifyToken(m[1], this.secret) : null
     if (!claims) throw new UnauthorizedError('Sesi tidak valid, silakan masuk lagi')
-    const { rows } = await this.pool.query('SELECT id, username, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV" FROM users WHERE id = $1', [claims.sub])
+    const { rows } = await this.pool.query(`SELECT id, username, display_name AS "displayName", xp, username_changed_at + interval '7 days' AS "usernameNextChangeAt", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV" FROM users WHERE id = $1`, [claims.sub])
+    if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
+    return this.issue(rows[0]).user
+  }
+
+  // ------------------------------------------------------------------ profil publik & XP
+  async updateProfile(userId: number, input: { displayName?: unknown; username?: unknown }): Promise<AuthUser> {
+    const displayName = input.displayName === undefined ? null : String(input.displayName).trim()
+    const username = input.username === undefined ? null : String(input.username).trim()
+    if (displayName !== null && (!displayName || displayName.length > 40 || /[\u0000-\u001f]/.test(displayName))) throw new ValidationError('Nama harus 1-40 karakter')
+    if (username !== null && !/^[A-Za-z0-9_.]{3,20}$/.test(username)) throw new ValidationError('Username 3-20 karakter: huruf, angka, titik, atau garis bawah')
+    const current = await this.meForUpdate(userId)
+    if (username && username.toLowerCase() !== current.username.toLowerCase()) {
+      if (current.usernameNextChangeAt && new Date(current.usernameNextChangeAt).getTime() > Date.now()) throw new ValidationError('Username masih dalam cooldown 7 hari')
+    }
+    try {
+      const { rows } = await this.pool.query(`UPDATE users SET display_name = COALESCE($2, display_name), username = COALESCE($3, username), username_changed_at = CASE WHEN $3 IS NOT NULL AND lower($3) <> lower(username) THEN now() ELSE username_changed_at END WHERE id = $1 AND ($3 IS NULL OR lower($3) = lower(username) OR username_changed_at IS NULL OR username_changed_at <= now() - interval '7 days') RETURNING id, username, display_name AS \"displayName\", xp, username_changed_at + interval '7 days' AS \"usernameNextChangeAt\", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS \"avatarV\"`, [userId, displayName, username])
+      if (!rows[0]) throw new ValidationError('Username masih dalam cooldown 7 hari')
+      return this.issue(rows[0]).user
+    } catch (e) { const err = e as { code?: string }; if (err.code === '23505') throw new ConflictError('Username sudah dipakai'); throw e }
+  }
+
+  private async meForUpdate(userId: number): Promise<any> {
+    const { rows } = await this.pool.query(`SELECT username, username_changed_at + interval '7 days' AS \"usernameNextChangeAt\" FROM users WHERE id = $1`, [userId])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
     return rows[0]
+  }
+
+  async awardXp(userId: number, eventKey: string, amount: number): Promise<void> {
+    const safeAmount = Math.max(1, Math.min(100, Math.floor(amount)))
+    await this.pool.query(`WITH added AS (INSERT INTO user_xp_events(user_id,event_key,amount) VALUES($1,$2,$3) ON CONFLICT(user_id,event_key) DO NOTHING RETURNING amount) UPDATE users SET xp = xp + COALESCE((SELECT amount FROM added),0) WHERE id=$1`, [userId, eventKey.slice(0, 180), safeAmount])
   }
 
   // ------------------------------------------------------------------ foto profil
 
   async setAvatar(userId: number, jpeg: Buffer): Promise<AuthUser> {
-    const { rows } = await this.pool.query('UPDATE users SET avatar = $2, avatar_v = avatar_v + 1 WHERE id = $1 RETURNING id, username, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV"', [userId, jpeg])
+    const { rows } = await this.pool.query(`UPDATE users SET avatar = $2, avatar_v = avatar_v + 1 WHERE id = $1 RETURNING id, username, display_name AS "displayName", xp, username_changed_at + interval '7 days' AS "usernameNextChangeAt", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV"`, [userId, jpeg])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
-    return rows[0]
+    return this.issue(rows[0]).user
   }
 
   async clearAvatar(userId: number): Promise<AuthUser> {
-    const { rows } = await this.pool.query('UPDATE users SET avatar = NULL, avatar_v = avatar_v + 1 WHERE id = $1 RETURNING id, username, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV"', [userId])
+    const { rows } = await this.pool.query(`UPDATE users SET avatar = NULL, avatar_v = avatar_v + 1 WHERE id = $1 RETURNING id, username, display_name AS "displayName", xp, username_changed_at + interval '7 days' AS "usernameNextChangeAt", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV"`, [userId])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
-    return rows[0]
+    return this.issue(rows[0]).user
   }
 
   async avatarOf(userId: number): Promise<Buffer | null> {
@@ -118,9 +155,9 @@ export class AuthService {
       throw new UnauthorizedError('Token Google tidak valid')
     }
     // 1) sudah pernah masuk dengan Google  2) email sama dengan akun yang ada (email Google terverifikasi) -> tautkan  3) buat baru
-    let { rows } = await this.pool.query('SELECT id, username, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV" FROM users WHERE google_sub = $1', [t.sub])
+    let { rows } = await this.pool.query(`SELECT id, username, display_name AS "displayName", xp, username_changed_at + interval '7 days' AS "usernameNextChangeAt", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV" FROM users WHERE google_sub = $1`, [t.sub])
     if (!rows[0]) {
-      rows = (await this.pool.query('UPDATE users SET google_sub = $1 WHERE lower(email) = lower($2) AND google_sub IS NULL RETURNING id, username, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV"', [t.sub, t.email])).rows
+      rows = (await this.pool.query(`UPDATE users SET google_sub = $1 WHERE lower(email) = lower($2) AND google_sub IS NULL RETURNING id, username, display_name AS "displayName", xp, username_changed_at + interval '7 days' AS "usernameNextChangeAt", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV"`, [t.sub, t.email])).rows
     }
     if (!rows[0]) {
       rows = [await this.createSocial({ google_sub: t.sub, email: t.email }, slugUsername(t.email.split('@')[0]))]
@@ -134,17 +171,17 @@ export class AuthService {
       const username = i === 0 ? base : `${base.slice(0, 16)}${Math.floor(Math.random() * 9000 + 1000)}`
       try {
         const { rows } = await this.pool.query(
-          'INSERT INTO users (username, email, google_sub) VALUES ($1, $2, $3) RETURNING id, username, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV"',
+          `INSERT INTO users (username, email, google_sub) VALUES ($1, $2, $3) RETURNING id, username, display_name AS "displayName", xp, username_changed_at + interval '7 days' AS "usernameNextChangeAt", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV"`,
           [username, cols.email ?? null, cols.google_sub ?? null]
         )
-        return rows[0]
+        return this.issue(rows[0]).user
       } catch (e) {
         const err = e as { code?: string; constraint?: string }
         if (err.code !== '23505') throw e
         if (err.constraint === 'users_username_lower') continue
         // email / google_sub bentrok = balapan dua request: ambil yang sudah ada
-        const { rows } = await this.pool.query('SELECT id, username, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV" FROM users WHERE google_sub = $1 LIMIT 1', [cols.google_sub ?? null])
-        if (rows[0]) return rows[0]
+        const { rows } = await this.pool.query(`SELECT id, username, display_name AS "displayName", xp, username_changed_at + interval '7 days' AS "usernameNextChangeAt", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV" FROM users WHERE google_sub = $1 LIMIT 1`, [cols.google_sub ?? null])
+        if (rows[0]) return this.issue(rows[0]).user
         throw new ConflictError('Email sudah terdaftar dengan akun lain')
       }
     }

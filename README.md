@@ -126,3 +126,15 @@ Migration `004` menambah foto profil dan tabel `comments`.
 
 - **Foto profil:** `PUT /v1/auth/me/avatar` (body mentah `image/jpeg`, maks. 300 KB; app memotong persegi & mengecilkan ke 384 px sebelum upload), `DELETE /v1/auth/me/avatar`, dan `GET /v1/users/:id/avatar?v=<avatarV>` (publik, di-cache lama; `v` berubah tiap ganti foto). Foto disimpan di PostgreSQL (kolom `bytea`), jadi tidak butuh disk/S3.
 - **Komentar:** `GET /v1/comments?target=…&limit=…&before=…` (publik), `POST /v1/comments` dan `DELETE /v1/comments/:id` (wajib login; hanya penulis yang bisa menghapus). `target` = `s:<id seri>` (halaman detail) atau `c:<id chapter>` (reader). Komentar maks. 1000 karakter, kiriman dibatasi 10/menit per IP. Belum ada moderasi/balasan; hapus komentar bermasalah lewat SQL (`DELETE FROM comments WHERE id = …`).
+
+## Profil, XP, dan interaksi komentar (MiToon)
+
+Migration `005_profiles_xp_social.sql` dijalankan otomatis saat server mulai. Migration ini menambah nama tampilan, cooldown username, XP, relasi balasan komentar, dan tabel reaksi/riwayat XP tanpa menghapus data lama.
+
+Endpoint tambahan:
+- `PUT /v1/auth/me/profile` — body JSON `displayName` dan/atau `username`; username 3-24 karakter (`a-z`, `A-Z`, angka, `_`) dan hanya dapat diganti kembali setelah 7 hari.
+- `POST /v1/auth/me/xp/read` — body `chapterId`; aktivitas baca bernilai 15 XP dan hanya dihitung sekali per user/chapter.
+- `POST /v1/comments` — menerima `parentId` opsional untuk balasan; komentar utama bernilai 8 XP, balasan 4 XP.
+- `POST /v1/comments/:id/reaction` — body `{"kind":"like"}`, `{"kind":"dislike"}`, atau `{"kind":null}` untuk menghapus reaksi.
+
+XP disimpan sebagai total kumulatif. Ambang level meningkat bertahap dengan rumus `floor((level - 1) * (100 + level * 35) / 2)`. Event XP memakai unique key agar request ulang tidak menggandakan poin. Endpoint komentar memakai polling dari APK untuk sinkronisasi tanpa refresh manual.
