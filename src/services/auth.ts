@@ -10,6 +10,8 @@ export interface AuthUser {
   username: string
   /** nama tampilan bebas; '' = belum diisi (app memakai username) */
   displayName: string
+  /** bio singkat (maks. 150 karakter); '' = belum diisi */
+  bio: string
   /** sisa detik cooldown ganti username saat respons dibuat (0 = boleh ganti sekarang) */
   usernameCooldownSec: number
   /** total XP, level, XP terkumpul di level ini, dan XP yang dibutuhkan untuk naik */
@@ -27,6 +29,7 @@ export interface PublicProfile {
   id: number
   username: string
   displayName: string
+  bio: string
   avatarV: number
   xp: number
   level: number
@@ -44,9 +47,9 @@ type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: strin
 const BAD_LOGIN = 'Username/email atau password salah'
 /** Username hanya boleh diganti sekali per 7 hari. */
 export const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, display_name AS "displayName", xp, verified, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec"`
+const COLS = `id, username, display_name AS "displayName", bio, xp, verified, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec"`
 
-type Row = { id: number; username: string; displayName?: string | null; xp?: number; verified?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null }
+type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null }
 const toUser = (r: Row): AuthUser => {
   const xp = Number(r.xp ?? 0)
   const lv = levelFor(xp)
@@ -54,6 +57,7 @@ const toUser = (r: Row): AuthUser => {
   id: r.id,
   username: r.username,
   displayName: r.displayName ?? '',
+  bio: r.bio ?? '',
   avatarV: Number(r.avatarV ?? 0),
   verified: r.verified === true,
   usernameCooldownSec: Number(r.usernameCooldownSec ?? 0),
@@ -143,7 +147,7 @@ export class AuthService {
    * Ubah nama tampilan dan/atau username. Nama bebas (maks. 30 karakter, kosong = hapus).
    * Username hanya boleh diganti bila sudah lewat 7 hari sejak penggantian terakhir (dicek atomik di SQL).
    */
-  async updateProfile(userId: number, patch: { displayName?: string | null; username?: string | null }): Promise<AuthUser> {
+  async updateProfile(userId: number, patch: { displayName?: string | null; username?: string | null; bio?: string | null }): Promise<AuthUser> {
     let setName = false
     let name: string | null = null
     if (patch.displayName != null) {
@@ -154,6 +158,18 @@ export class AuthService {
       setName = true
       name = name || null
     }
+    let setBio = false
+    let bio: string | null = null
+    if (patch.bio != null) {
+      // baris baru boleh (maks. 3 baris); spasi berlebih dirapikan, kosong = hapus
+      bio = String(patch.bio).replace(/\r\n?/g, '\n').split('\n').map(l => l.replace(/[ \t]+/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim()
+      // eslint-disable-next-line no-control-regex
+      if (/[\u0000-\u0009\u000b-\u001f\u007f]/.test(bio)) throw new ValidationError('Bio mengandung karakter tidak valid')
+      if ([...bio].length > 150) throw new ValidationError('Bio maksimal 150 karakter')
+      if (bio.split('\n').length > 3) throw new ValidationError('Bio maksimal 3 baris')
+      setBio = true
+      bio = bio || null
+    }
     let setUser = false
     let username: string | null = null
     if (patch.username != null) {
@@ -161,7 +177,7 @@ export class AuthService {
       if (!USERNAME_RE.test(username)) throw new ValidationError(USERNAME_MSG)
       setUser = true
     }
-    if (!setName && !setUser) throw new ValidationError('Tidak ada perubahan')
+    if (!setName && !setUser && !setBio) throw new ValidationError('Tidak ada perubahan')
 
     if (setUser) {
       const { rows } = await this.pool.query('SELECT ' + COLS + ' FROM users WHERE id = $1', [userId])
@@ -169,7 +185,7 @@ export class AuthService {
       if (!now) throw new UnauthorizedError('Akun tidak ditemukan')
       if (now.username === username) setUser = false // sama persis: tidak dihitung sebagai penggantian
       else if (Number(now.usernameCooldownSec ?? 0) > 0) throw this.cooldownError(Number(now.usernameCooldownSec))
-      if (!setName && !setUser) return toUser(now)
+      if (!setName && !setUser && !setBio) return toUser(now)
     }
 
     try {
@@ -177,10 +193,11 @@ export class AuthService {
         `UPDATE users SET
            display_name = CASE WHEN $2::boolean THEN $3::text ELSE display_name END,
            username = CASE WHEN $4::boolean THEN $5::text ELSE username END,
+           bio = CASE WHEN $6::boolean THEN $7::text ELSE bio END,
            username_changed_at = CASE WHEN $4::boolean THEN now() ELSE username_changed_at END
          WHERE id = $1 AND (NOT $4::boolean OR username_changed_at IS NULL OR username_changed_at <= now() - interval '${USERNAME_COOLDOWN_DAYS} days')
          RETURNING ` + COLS,
-        [userId, setName, name, setUser, username]
+        [userId, setName, name, setUser, username, setBio, bio]
       )
       if (rows[0]) return toUser(rows[0])
     } catch (e) {
@@ -214,6 +231,7 @@ export class AuthService {
       id: Number(r.id),
       username: r.username,
       displayName: r.displayName ?? '',
+      bio: r.bio ?? '',
       avatarV: Number(r.avatarV ?? 0),
       xp,
       level: levelFor(xp).level,

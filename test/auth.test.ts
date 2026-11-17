@@ -48,13 +48,14 @@ function fakes() {
         return { rows: [u] }
       }
       if (sql.startsWith('UPDATE users SET\n           display_name')) {
-        const [id, setName, name, setUser, username] = p
+        const [id, setName, name, setUser, username, setBio, bio] = p
         const u = users.find(x => x.id === id)
         if (!u) return { rows: [] }
         const cd = cooldown(u)
         if (setUser && cd > 0) return { rows: [] }
         if (setUser && users.some(o => o.id !== id && o.username.toLowerCase() === String(username).toLowerCase())) throw Object.assign(new Error('dup'), { code: '23505', constraint: 'users_username_lower' })
         if (setName) u.displayName = name
+        if (setBio) u.bio = bio
         if (setUser) { u.username = username; u.changedAt = clock.now }
         return { rows: [{ ...u, usernameCooldownSec: cooldown(u) }] }
       }
@@ -118,6 +119,13 @@ test('profil: ganti nama bebas, username sekali per 7 hari', async () => {
   await assert.rejects(svc.updateProfile(a.user.id, { displayName: 'a\u0007b' }), /tidak valid/)
   await assert.rejects(svc.updateProfile(a.user.id, {}), /Tidak ada perubahan/)
 
+  // bio: dirapikan, kosong = hapus, >150 karakter / >3 baris / karakter kontrol ditolak
+  assert.equal((await svc.updateProfile(a.user.id, { bio: '  Suka   manhwa \r\n\n\n\nAksi & romansa ' })).bio, 'Suka manhwa\n\nAksi & romansa')
+  assert.equal((await svc.updateProfile(a.user.id, { bio: '' })).bio, '')
+  await assert.rejects(svc.updateProfile(a.user.id, { bio: 'x'.repeat(151) }), /maksimal 150/)
+  await assert.rejects(svc.updateProfile(a.user.id, { bio: 'a\nb\nc\nd' }), /maksimal 3 baris/)
+  await assert.rejects(svc.updateProfile(a.user.id, { bio: 'a\u0007b' }), /tidak valid/)
+
   // username: format, bentrok, lalu berhasil -> cooldown aktif
   await assert.rejects(svc.updateProfile(a.user.id, { username: 'a!' }), /Username 3–20/)
   await assert.rejects(svc.updateProfile(a.user.id, { username: 'ANDI' }), /sudah dipakai/)
@@ -152,7 +160,7 @@ test('profil publik: tanpa email/hash, memuat level & jumlah komentar; tak ada =
   const svc = new AuthService(f.pool as any, cfg, log)
   const a = await svc.register('budi', 'budi@mail.com', 'password1')
   const pub = await svc.publicProfile(a.user.id)
-  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'commentCount', 'displayName', 'id', 'joinedAt', 'level', 'username', 'xp'])
+  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'bio', 'commentCount', 'displayName', 'id', 'joinedAt', 'level', 'username', 'verified', 'xp'])
   assert.equal(pub.username, 'budi')
   assert.equal(pub.level, 1)
   assert.equal(pub.commentCount, 3)

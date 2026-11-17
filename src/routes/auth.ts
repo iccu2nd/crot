@@ -88,14 +88,14 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     {
       schema: {
         tags: ['auth'],
-        summary: 'Ubah nama tampilan dan/atau username (username: cooldown 7 hari)',
-        body: { type: 'object', properties: { displayName: { type: ['string', 'null'], maxLength: 200 }, username: { type: ['string', 'null'], maxLength: 60 } } }
+        summary: 'Ubah nama tampilan, bio, dan/atau username (username: cooldown 7 hari)',
+        body: { type: 'object', properties: { displayName: { type: ['string', 'null'], maxLength: 200 }, username: { type: ['string', 'null'], maxLength: 60 }, bio: { type: ['string', 'null'], maxLength: 600 } } }
       },
       config: limit(10)
     },
     async (req, reply) => {
       const user = await auth.me(req.headers.authorization)
-      const b = (req.body ?? {}) as { displayName?: string | null; username?: string | null }
+      const b = (req.body ?? {}) as { displayName?: string | null; username?: string | null; bio?: string | null }
       reply200(reply)
       return { data: await auth.updateProfile(user.id, b) }
     }
