@@ -73,6 +73,16 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     }
   )
 
+  // Publik: profil singkat pengguna lain (nama, level, XP, kapan bergabung, jumlah komentar).
+  app.get(
+    '/users/:id',
+    { schema: { tags: ['auth'], summary: 'Profil publik pengguna', params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } } } }, config: limit(120) },
+    async (req, reply) => {
+      reply.headers({ 'cache-control': 'public, max-age=30' })
+      return { data: await auth.publicProfile((req.params as { id: number }).id) }
+    }
+  )
+
   app.patch(
     '/auth/me',
     {

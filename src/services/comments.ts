@@ -127,11 +127,11 @@ export class CommentService {
     return { likes: Number(rows[0]?.likes ?? 0), dislikes: Number(rows[0]?.dislikes ?? 0), myVote: value }
   }
 
-  /** Riwayat komentar & balasan milik `userId`, terbaru dulu; lanjut dengan `before` = id terakhir yang sudah dimuat. */
-  async mine(userId: number, limit = 20, before?: number): Promise<{ total: number; hasMore: boolean; items: MyCommentItem[] }> {
+  /** Komentar & balasan milik `userId` (riwayat sendiri, atau profil orang lain bila `viewer` = pemirsa), terbaru dulu; lanjut dengan `before` = id terakhir yang sudah dimuat. */
+  async mine(userId: number, limit = 20, before?: number, viewer: number | null = userId): Promise<{ total: number; hasMore: boolean; items: MyCommentItem[] }> {
     const n = clampLimit(limit)
     const [items, total] = await Promise.all([
-      this.pool.query(`${select('$1')} WHERE c.user_id = $1 AND ($2::bigint IS NULL OR c.id < $2) ORDER BY c.id DESC LIMIT $3`, [userId, before ?? null, n + 1]),
+      this.pool.query(`${select('$4')} WHERE c.user_id = $1 AND ($2::bigint IS NULL OR c.id < $2) ORDER BY c.id DESC LIMIT $3`, [userId, before ?? null, n + 1, viewer]),
       this.pool.query('SELECT count(*)::int AS n FROM comments WHERE user_id = $1', [userId])
     ])
     return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(r => ({ ...toItem(r), target: String(r.target) })) }

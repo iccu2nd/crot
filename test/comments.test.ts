@@ -50,7 +50,7 @@ function fakePool() {
       if (sql.startsWith('SELECT user_id FROM comments')) return { rows: rows.filter(c => c.id === p[0]) }
       if (sql.includes('WHERE c.user_id = $1')) {
         const out = rows.filter(c => c.user_id === p[0] && (p[1] == null || c.id < p[1])).sort((a, b) => b.id - a.id).slice(0, p[2])
-        return { rows: out.map(c => ({ ...join(c, p[0]), target: c.target })) }
+        return { rows: out.map(c => ({ ...join(c, p[3]), target: c.target })) }
       }
       if (sql.includes('WHERE c.id = $1')) return { rows: rows.filter(c => c.id === p[0]).map(c => join(c, p[1])) }
       if (sql.includes('WHERE c.target = $1 AND')) {
@@ -155,6 +155,10 @@ test('riwayat komentar: hanya milik sendiri (termasuk balasan), terbaru dulu, me
   assert.equal(p2.hasMore, false)
   assert.deepEqual(p2.items.map(i => i.body), ['satu'])
   assert.deepEqual((await svc.mine(99)).items, [])
+  // profil orang lain: myVote mengikuti pemirsa, bukan pemilik komentar
+  await svc.vote(2, p1.items[0].id, 1)
+  assert.equal((await svc.mine(1, 1, undefined, 2)).items[0].myVote, 1)
+  assert.equal((await svc.mine(1, 1, undefined, null)).items[0].myVote, 0)
 })
 
 test('like/dislike: satu suara per pengguna, bisa ganti & batal, myVote sesuai pemirsa', async () => {

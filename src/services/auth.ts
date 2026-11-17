@@ -3,7 +3,7 @@ import type { Pool } from 'pg'
 import type { Config } from '../config.js'
 import { levelFor } from '../core/xp.js'
 import { USERNAME_MSG, USERNAME_RE, checkRegistration, formatCooldown, hashPassword, signToken, slugUsername, verifyPassword, verifyToken } from '../core/auth.js'
-import { AppError, ConflictError, NotConfiguredError, UnauthorizedError, ValidationError } from '../core/errors.js'
+import { AppError, ConflictError, NotConfiguredError, NotFoundError, UnauthorizedError, ValidationError } from '../core/errors.js'
 
 export interface AuthUser {
   id: number
@@ -19,6 +19,18 @@ export interface AuthUser {
   levelNeed: number
   /** versi foto profil (0 = belum ada); dipakai app untuk URL /users/:id/avatar?v= */
   avatarV: number
+}
+/** Profil yang boleh dilihat siapa saja (tanpa email/data akun). */
+export interface PublicProfile {
+  id: number
+  username: string
+  displayName: string
+  avatarV: number
+  xp: number
+  level: number
+  /** kapan akun dibuat (epoch ms) */
+  joinedAt: number
+  commentCount: number
 }
 export interface AuthResult {
   token: string
@@ -179,6 +191,31 @@ export class AuthService {
 
   private cooldownError(sec: number) {
     return new AppError(429, 'USERNAME_COOLDOWN', `Username baru bisa diganti lagi dalam ${formatCooldown(sec)}`)
+  }
+
+  // ------------------------------------------------------------------ profil publik
+
+  async publicProfile(userId: number): Promise<PublicProfile> {
+    const { rows } = await this.pool.query(
+      `SELECT u.id, u.username, u.display_name AS "displayName", u.xp, u.created_at AS "createdAt",
+              CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
+              (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"
+         FROM users u WHERE u.id = $1`,
+      [userId]
+    )
+    const r = rows[0]
+    if (!r) throw new NotFoundError('Pengguna tidak ditemukan')
+    const xp = Number(r.xp ?? 0)
+    return {
+      id: Number(r.id),
+      username: r.username,
+      displayName: r.displayName ?? '',
+      avatarV: Number(r.avatarV ?? 0),
+      xp,
+      level: levelFor(xp).level,
+      joinedAt: new Date(r.createdAt).getTime(),
+      commentCount: Number(r.commentCount ?? 0)
+    }
   }
 
   // ------------------------------------------------------------------ hapus akun

@@ -47,6 +47,24 @@ export const commentRoutes: FastifyPluginAsync<{ auth: AuthService; comments: Co
   )
 
   app.get(
+    '/users/:id/comments',
+    {
+      schema: {
+        tags: ['comments'],
+        summary: 'Komentar & balasan seorang pengguna (publik, terbaru dulu)',
+        params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } } },
+        querystring: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 }, before: { type: 'integer', minimum: 1 } } }
+      },
+      config: limit(90)
+    },
+    async (req, reply) => {
+      const q = req.query as { limit?: number; before?: number }
+      void reply.header('cache-control', 'no-store')
+      return { data: await comments.mine((req.params as { id: number }).id, q.limit ?? 20, q.before, auth.viewerId(req.headers.authorization)) }
+    }
+  )
+
+  app.get(
     '/comments/:id/replies',
     {
       schema: {

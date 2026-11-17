@@ -58,6 +58,7 @@ function fakes() {
         if (setUser) { u.username = username; u.changedAt = clock.now }
         return { rows: [{ ...u, usernameCooldownSec: cooldown(u) }] }
       }
+      if (sql.includes('FROM users u WHERE u.id = $1')) return { rows: users.filter(u => u.id === p[0]).map(u => ({ ...u, createdAt: new Date(1_700_000_000_000), commentCount: 3 })) }
       if (sql.startsWith('DELETE FROM users WHERE id = $1')) {
         const i = users.findIndex(u => u.id === p[0])
         if (i >= 0) users.splice(i, 1)
@@ -144,4 +145,17 @@ test('hapus akun: akun hilang, token lama tidak berlaku, hapus ulang ditolak', a
   assert.equal(f.users.length, 0)
   await assert.rejects(svc.me(`Bearer ${a.token}`), /Akun tidak ditemukan/)
   await assert.rejects(svc.deleteAccount(a.user.id), /Akun tidak ditemukan/)
+})
+
+test('profil publik: tanpa email/hash, memuat level & jumlah komentar; tak ada = 404', async () => {
+  const f = fakes()
+  const svc = new AuthService(f.pool as any, cfg, log)
+  const a = await svc.register('budi', 'budi@mail.com', 'password1')
+  const pub = await svc.publicProfile(a.user.id)
+  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'commentCount', 'displayName', 'id', 'joinedAt', 'level', 'username', 'xp'])
+  assert.equal(pub.username, 'budi')
+  assert.equal(pub.level, 1)
+  assert.equal(pub.commentCount, 3)
+  assert.equal(pub.joinedAt, 1_700_000_000_000)
+  await assert.rejects(svc.publicProfile(999), /tidak ditemukan/)
 })
