@@ -16,6 +16,7 @@ import { announcementRoutes } from './routes/announcements.js'
 import { authRoutes } from './routes/auth.js'
 import { commentRoutes } from './routes/comments.js'
 import { xpRoutes } from './routes/xp.js'
+import { readingRoutes } from './routes/reading.js'
 import { catalogRoutes } from './routes/catalog.js'
 import { seriesRoutes } from './routes/series.js'
 import { systemRoutes } from './routes/system.js'
@@ -23,6 +24,7 @@ import { AnnouncementRepo } from './services/announcements.js'
 import { AuthService } from './services/auth.js'
 import { CommentService } from './services/comments.js'
 import { XpService } from './services/xp.js'
+import { ReadingService } from './services/reading.js'
 import { ScraperService } from './services/scraper.js'
 import { ViewCounter } from './services/views.js'
 import { Warmer } from './services/warmer.js'
@@ -115,6 +117,7 @@ export async function createApp(cfg: Config) {
   const auth = new AuthService(pool, cfg.auth, log)
   const xp = new XpService(pool)
   const comments = new CommentService(pool, xp)
+  const reading = new ReadingService(pool)
 
   // ---- error handling ----
   app.setErrorHandler((err: any, req, reply) => {
@@ -150,6 +153,7 @@ export async function createApp(cfg: Config) {
       await v1.register(authRoutes, { auth })
       await v1.register(commentRoutes, { auth, comments })
       await v1.register(xpRoutes, { auth, xp })
+      await v1.register(readingRoutes, { auth, reading })
       await v1.register(announcementRoutes, { repo: new AnnouncementRepo(pool), adminToken: cfg.adminToken })
     },
     { prefix: '/v1' }

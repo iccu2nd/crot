@@ -71,7 +71,7 @@ function fakes() {
   }
   return { users, pool }
 }
-const cfg = { jwtSecret: 'x', tokenTtlSec: 3600, googleClientId: '' }
+const cfg = { jwtSecret: 'x', tokenTtlSec: 3600, googleClientId: '', ownerEmails: [] as string[] }
 const log = { warn() {}, error() {} }
 
 test('register + login + me', async () => {

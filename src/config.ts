@@ -22,6 +22,8 @@ export const config = {
     jwtSecret: env.JWT_SECRET ?? '',
     tokenTtlSec: 90 * 24 * 3600,
     googleClientId: env.GOOGLE_CLIENT_ID ?? '',
+    /** Email owner (pisah koma). Akun yang masuk lewat Google dengan email terverifikasi ini otomatis dapat centang verified. */
+    ownerEmails: (env.OWNER_EMAILS ?? 'hihanghoheng1507@gmail.com').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
   },
   pgPoolMax: serverless ? 2 : 10,
   autoMigrate: !serverless,

@@ -132,3 +132,11 @@ Migration `004` menambah foto profil dan tabel `comments`.
 - **Profil publik:** `GET /v1/users/:id` (nama, level, XP, `joinedAt`, `commentCount`; tanpa email) dan `GET /v1/users/:id/comments?limit=&before=` (komentar & balasan pengguna itu, terbaru dulu; `myVote` mengikuti pemirsa bila ada token).
 - **Hapus akun:** `DELETE /v1/auth/me?confirm=HAPUS` (wajib login; maks. 3/menit). Baris `users` dihapus; komentar, suara, dan riwayat XP ikut terhapus lewat `ON DELETE CASCADE`.
 - **Komentar:** `GET /v1/comments?target=…&limit=…&before=…` (publik), `POST /v1/comments` dan `DELETE /v1/comments/:id` (wajib login; hanya penulis yang bisa menghapus). `target` = `s:<id seri>` (halaman detail) atau `c:<id chapter>` (reader). Komentar maks. 1000 karakter, kiriman dibatasi 10/menit per IP. Belum ada moderasi/balasan; hapus komentar bermasalah lewat SQL (`DELETE FROM comments WHERE id = …`).
+
+## Verified & riwayat baca
+
+Migration `008`.
+
+- **Verified (centang biru):** kolom `users.verified`, ikut di `GET /auth/me`, `GET /users/:id`, dan tiap komentar (`user.verified`). Akun yang emailnya ada di `OWNER_EMAILS` (default `hihanghoheng1507@gmail.com`) ditandai otomatis: akun yang **sudah ada** saat migration dijalankan, dan akun yang **masuk lewat Google** (email sudah diverifikasi Google). Pendaftaran password dengan email itu *tidak* otomatis, karena emailnya belum terbukti milik pendaftar. Tandai manual: `UPDATE users SET verified = true WHERE username = '...';`.
+- **Riwayat baca:** `PUT /v1/reading` (wajib login) `{seriesId, chapterId, chapterNumber, chaptersRead, title?}` menimpa satu baris per seri; `GET /v1/users/:id/reading?limit=&before=` (publik, terbaru dulu, `before` = `readAt` item terakhir) memberi `{items: [{seriesId, title, cover, provider, chapterId, chapterNumber, chaptersRead, readAt}], hasMore}`. Judul & cover diambil dari tabel `series` (bukan dari kiriman pengguna, supaya URL cover tidak bisa diisi sembarang); maksimal 200 seri per pengguna (yang terlama dibuang).
+- **Batas level** dinaikkan dari 1000 ke 10000 supaya tier tampilan level 3000/5000 di app bisa tercapai.

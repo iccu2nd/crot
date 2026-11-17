@@ -19,6 +19,8 @@ export interface AuthUser {
   levelNeed: number
   /** versi foto profil (0 = belum ada); dipakai app untuk URL /users/:id/avatar?v= */
   avatarV: number
+  /** centang biru (ditetapkan server, mis. akun owner) */
+  verified: boolean
 }
 /** Profil yang boleh dilihat siapa saja (tanpa email/data akun). */
 export interface PublicProfile {
@@ -31,6 +33,7 @@ export interface PublicProfile {
   /** kapan akun dibuat (epoch ms) */
   joinedAt: number
   commentCount: number
+  verified: boolean
 }
 export interface AuthResult {
   token: string
@@ -41,9 +44,9 @@ type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: strin
 const BAD_LOGIN = 'Username/email atau password salah'
 /** Username hanya boleh diganti sekali per 7 hari. */
 export const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, display_name AS "displayName", xp, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec"`
+const COLS = `id, username, display_name AS "displayName", xp, verified, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec"`
 
-type Row = { id: number; username: string; displayName?: string | null; xp?: number; avatarV?: number; usernameCooldownSec?: number | string | null }
+type Row = { id: number; username: string; displayName?: string | null; xp?: number; verified?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null }
 const toUser = (r: Row): AuthUser => {
   const xp = Number(r.xp ?? 0)
   const lv = levelFor(xp)
@@ -52,6 +55,7 @@ const toUser = (r: Row): AuthUser => {
   username: r.username,
   displayName: r.displayName ?? '',
   avatarV: Number(r.avatarV ?? 0),
+  verified: r.verified === true,
   usernameCooldownSec: Number(r.usernameCooldownSec ?? 0),
   xp,
   level: lv.level,
@@ -197,7 +201,7 @@ export class AuthService {
 
   async publicProfile(userId: number): Promise<PublicProfile> {
     const { rows } = await this.pool.query(
-      `SELECT u.id, u.username, u.display_name AS "displayName", u.xp, u.created_at AS "createdAt",
+      `SELECT u.id, u.username, u.display_name AS "displayName", u.xp, u.verified, u.created_at AS "createdAt",
               CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
               (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"
          FROM users u WHERE u.id = $1`,
@@ -214,7 +218,8 @@ export class AuthService {
       xp,
       level: levelFor(xp).level,
       joinedAt: new Date(r.createdAt).getTime(),
-      commentCount: Number(r.commentCount ?? 0)
+      commentCount: Number(r.commentCount ?? 0),
+      verified: r.verified === true
     }
   }
 
@@ -265,6 +270,11 @@ export class AuthService {
     }
     if (!rows[0]) {
       rows = [await this.createSocial({ google_sub: t.sub, email: t.email }, slugUsername(t.email.split('@')[0]))]
+    }
+    // Email owner (sudah diverifikasi Google di atas) -> centang verified. Pendaftaran password TIDAK otomatis: emailnya belum terbukti milik pendaftar.
+    if (!rows[0].verified && this.cfg.ownerEmails.includes(t.email.toLowerCase())) {
+      const upd = await this.pool.query('UPDATE users SET verified = true WHERE id = $1 RETURNING ' + COLS, [rows[0].id])
+      if (upd.rows[0]) rows = upd.rows
     }
     return this.issue(rows[0])
   }

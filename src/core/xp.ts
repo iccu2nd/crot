@@ -33,7 +33,7 @@ export interface LevelInfo {
 export function levelFor(xp: number): LevelInfo {
   let level = 1
   let left = Math.max(0, Math.floor(Number(xp) || 0))
-  while (left >= levelCost(level) && level < 1000) {
+  while (left >= levelCost(level) && level < 10000) {
     left -= levelCost(level)
     level++
   }
