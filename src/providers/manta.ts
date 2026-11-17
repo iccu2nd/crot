@@ -9,7 +9,13 @@ const BASE = 'https://manta.net'
 const HOME_VERSION = '202606'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 const SECTIONS: Record<string, string> = { comic: 'comics', manga: 'manga', novel: 'novels' }
-const HEADERS = { 'user-agent': UA, referer: `${BASE}/en`, 'accept-language': 'en-US,en;q=0.9' }
+const HEADERS = {
+  'user-agent': UA,
+  accept: 'application/json, text/html;q=0.9, */*;q=0.8',
+  origin: BASE,
+  referer: `${BASE}/en`,
+  'accept-language': 'en-US,en;q=0.9'
+}
 
 type Raw = Record<string, any>
 
@@ -43,6 +49,8 @@ function typeOf(n: unknown, tags: Raw[] = []): string {
   return tags.some(t => t?.id === 292) ? 'novel' : 'comic'
 }
 
+const statusOf = (v: unknown): 'ongoing' | 'completed' | null => (v === true ? 'completed' : v === false ? 'ongoing' : null)
+
 function toSummary(raw: Raw): SeriesSummary | null {
   const d: Raw = raw.data ?? {}
   const ref = String(raw.id ?? raw.seriesId ?? '')
@@ -57,7 +65,7 @@ function toSummary(raw: Raw): SeriesSummary | null {
     cover: cover(raw.image) || raw.coverImage?.downloadUrl || '',
     url: `${BASE}/en/series/${ref}`,
     type: typeOf(raw.type ?? raw.seriesType, d.tags),
-    status: null,
+    status: statusOf(d.isCompleted),
     genres: tagNames(d.tags),
     rating: null,
     chapterCount: numOrNull(raw.episodeCount ?? ord),
@@ -78,13 +86,49 @@ const episodesOf = (s: Raw): Episode[] =>
     .map((ep: Raw) => ({
       id: String(ep.id),
       number: String(ep.ord ?? ep.id),
-      title: ep.data?.title ?? `Episode ${ep.ord}`,
+      title: loc(ep.data?.title) || `Episode ${ep.ord}`,
       date: isoDate(ep.openAt)
     }))
     .sort((a: Episode, b: Episode) => parseFloat(b.number) - parseFloat(a.number))
 
-/** Halaman seri dipakai detail() dan chapter(); di-memo singkat agar tidak fetch ganda. */
-const seriesPage = memo((id: string) => pageProps(`/en/series/${encodeURIComponent(id)}`), 30_000)
+/** Data seri: API JSON `/front/v1/series/:id` dulu (lebih stabil), fallback ke __NEXT_DATA__ halaman web. */
+async function loadSeries(id: string): Promise<Raw> {
+  const enc = encodeURIComponent(id)
+  try {
+    const s = (await getJson(`/front/v1/series/${enc}`)).data
+    if (s && typeof s === 'object') return s
+  } catch (e) {
+    if (e instanceof NotFoundError) throw e
+  }
+  const p = await pageProps(`/en/series/${enc}`)
+  if (!p.initialSeries) throw new NotFoundError(`Series "${id}" tidak ditemukan`)
+  return { ...p.initialSeries, _head: p.headData }
+}
+
+/** Dipakai detail() dan chapter(); di-memo singkat agar tidak fetch ganda. */
+const seriesPage = memo(loadSeries, 30_000)
+
+const imageUrls = (list: any[] | undefined): string[] => (list ?? []).map((x: Raw) => x?.downloadUrl).filter(Boolean)
+
+/** Gambar episode: `cutImages` penuh dari API; bila kosong/gagal, pakai `previewCutImages` dari halaman web. */
+async function loadImages(id: string): Promise<string[]> {
+  const enc = encodeURIComponent(id)
+  let apiOk = false
+  try {
+    const ep = (await getJson(`/front/v1/episodes/${enc}`)).data
+    apiOk = true
+    const full = imageUrls(ep?.cutImages)
+    if (full.length) return full
+  } catch (e) {
+    if (e instanceof NotFoundError) throw e
+  }
+  try {
+    return imageUrls((await pageProps(`/en/episodes/${enc}`)).previewCutImages)
+  } catch (e) {
+    if (apiOk && !(e instanceof NotFoundError)) return []
+    throw e
+  }
+}
 
 export function createManta(): ProviderAdapter {
   return {
@@ -106,27 +150,26 @@ export function createManta(): ProviderAdapter {
     },
 
     async detail(ref): Promise<SeriesDetail> {
-      const p = await seriesPage(ref)
-      const s = p.initialSeries
-      if (!s) throw new NotFoundError(`Series "${ref}" tidak ditemukan`)
+      const s = await seriesPage(ref)
+      const head: Raw = s._head ?? {}
       const d: Raw = s.data ?? {}
       const chapters: ChapterSummary[] = episodesOf(s).map(e => ({ ...e, id: cid(KEY, `${ref}:${e.id}`) }))
       const id = sid(KEY, ref)
       return {
         id,
         provider: KEY,
-        title: String(loc(d.title) || p.headData?.title || ref).trim(),
-        cover: cover(s.image) || p.headData?.image || '',
+        title: String(loc(d.title) || head.title || ref).trim(),
+        cover: cover(s.image) || head.image || '',
         url: `${BASE}/en/series/${ref}`,
         type: typeOf(s.type, d.tags),
-        status: null,
+        status: statusOf(d.isCompleted),
         genres: tagNames(d.tags),
         rating: null,
         chapterCount: chapters.length,
         latestChapter: chapters[0]?.number ?? null,
         sources: [{ provider: KEY, id }],
-        synopsis: d.description?.long ?? d.description?.short ?? p.headData?.description ?? '',
-        author: (d.creators ?? []).map((c: Raw) => c.name).filter(Boolean).join(', '),
+        synopsis: loc(d.description?.long ?? d.description?.short ?? d.description) || head.description || '',
+        author: (d.creators ?? []).map((c: Raw) => c.name ?? c.creatorName).filter(Boolean).join(', '),
         artist: '',
         year: null,
         chapters
@@ -137,19 +180,16 @@ export function createManta(): ProviderAdapter {
     async chapter(ref): Promise<ChapterContent> {
       const [seriesId, episodeId] = splitOnce(ref)
       let id = episodeId
-      const chaptersP = seriesPage(seriesId).then(
-        p => (p.initialSeries ? episodesOf(p.initialSeries) : []),
-        () => [] as Episode[]
-      )
+      const chaptersP = seriesPage(seriesId).then(episodesOf, () => [] as Episode[])
       if (Number(id) < 1000) id = (await chaptersP).find(c => c.number === id)?.id ?? id
-      const [p, chapters] = await Promise.all([pageProps(`/en/episodes/${encodeURIComponent(id)}`), chaptersP])
+      const [images, chapters] = await Promise.all([loadImages(id), chaptersP])
       const i = chapters.findIndex(c => c.id === id)
       const link = (e?: Episode) => (e ? cid(KEY, `${seriesId}:${e.id}`) : null)
       return {
         id: cid(KEY, `${seriesId}:${id}`),
         seriesId: sid(KEY, seriesId),
         number: i !== -1 ? chapters[i].number : id,
-        images: (p.previewCutImages ?? []).map((x: Raw) => x.downloadUrl).filter(Boolean),
+        images,
         prev: i !== -1 && i < chapters.length - 1 ? link(chapters[i + 1]) : null,
         next: i > 0 ? link(chapters[i - 1]) : null,
         imageHeaders: this.imageHeaders()

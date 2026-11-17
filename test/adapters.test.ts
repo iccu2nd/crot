@@ -30,29 +30,49 @@ describe('manta', () => {
     } finally { m.restore() }
   })
 
-  it('detail & chapter (nomor < 1000 -> id episode, prev/next, urut terbaru dulu)', async () => {
+  it('detail & chapter via API JSON (nomor < 1000 -> id episode, prev/next, urut terbaru dulu)', async () => {
+    const eps = episodes.map(e => ({ ...e, data: { title: { en: `Ep ${e.ord}` } } }))
     const m = mockFetch({
-      '/en/series/5': () => ({ text: nextData({ initialSeries: { ...seriesRaw, episodes } }) }),
-      '/en/episodes/9002': () => ({ text: nextData({ previewCutImages: [{ downloadUrl: 'i1' }, { downloadUrl: 'i2' }, {}] }) })
+      '/front/v1/series/5': () => ({ json: { data: { ...seriesRaw, data: { ...seriesRaw.data, isCompleted: true, description: { en: 'Sinopsis' } }, episodes: eps } } }),
+      '/front/v1/episodes/9002': () => ({ json: { data: { cutImages: [{ downloadUrl: 'i1' }, { downloadUrl: 'i2' }, {}] } } })
     })
     try {
       const a = createManta()
       const d = await a.detail('5')
       assert.deepEqual(d.chapters.map(c => c.number), ['3', '2', '1'])
       assert.equal(d.chapters[1].id, 'manta:5:9002')
+      assert.equal(d.chapters[1].title, 'Ep 2')
       assert.equal(d.chapters[1].date, '2024-01-02T03:04:05.000Z')
       assert.equal(d.author, 'Kim')
+      assert.equal(d.synopsis, 'Sinopsis')
+      assert.equal(d.status, 'completed')
       const ch = await a.chapter('5:2') // nomor chapter -> dipetakan ke id episode
       assert.equal(ch.id, 'manta:5:9002')
       assert.deepEqual(ch.images, ['i1', 'i2'])
       assert.equal(ch.prev, 'manta:5:9001')
       assert.equal(ch.next, 'manta:5:9003')
-      assert.equal(m.calls.filter(u => u.includes('/en/series/5')).length, 1, 'halaman seri di-memo')
+      assert.equal(m.calls.filter(u => u.includes('/front/v1/series/5')).length, 1, 'data seri di-memo')
+    } finally { m.restore() }
+  })
+
+  it('fallback ke __NEXT_DATA__ bila API gagal; cutImages kosong -> previewCutImages', async () => {
+    const m = mockFetch({
+      '/front/v1/series/6': () => ({ status: 403 }),
+      '/en/series/6': () => ({ text: nextData({ initialSeries: { ...seriesRaw, id: 6, episodes } }) }),
+      '/front/v1/episodes/9002': () => ({ json: { data: { cutImages: [] } } }),
+      '/en/episodes/9002': () => ({ text: nextData({ previewCutImages: [{ downloadUrl: 'p1' }] }) })
+    })
+    try {
+      const a = createManta()
+      const d = await a.detail('6')
+      assert.deepEqual(d.chapters.map(c => c.number), ['3', '2', '1'])
+      const ch = await a.chapter('6:9002')
+      assert.deepEqual(ch.images, ['p1'])
     } finally { m.restore() }
   })
 
   it('404 -> NotFoundError tanpa retry', async () => {
-    const m = mockFetch({ '/en/series/404': () => ({ status: 404 }) })
+    const m = mockFetch({ '/front/v1/series/404': () => ({ status: 404 }) })
     try {
       await assert.rejects(createManta().detail('404'), { code: 'NOT_FOUND' })
       assert.equal(m.calls.length, 1)
