@@ -91,6 +91,25 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     }
   )
 
+  app.delete(
+    '/auth/me',
+    {
+      schema: {
+        tags: ['auth'],
+        summary: 'Hapus akun permanen (wajib `confirm=HAPUS`)',
+        querystring: { type: 'object', required: ['confirm'], properties: { confirm: { type: 'string', maxLength: 20 } } }
+      },
+      config: limit(3)
+    },
+    async (req, reply) => {
+      const user = await auth.me(req.headers.authorization)
+      if ((req.query as { confirm: string }).confirm !== 'HAPUS') throw new ValidationError('Ketik HAPUS untuk mengonfirmasi')
+      await auth.deleteAccount(user.id)
+      reply200(reply)
+      return { data: { ok: true } }
+    }
+  )
+
   app.get('/auth/me', { schema: { tags: ['auth'], summary: 'Akun yang sedang masuk (Bearer token)' }, config: limit(60) }, async (req, reply) => {
     reply200(reply)
     return { data: await auth.me(req.headers.authorization) }

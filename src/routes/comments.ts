@@ -28,6 +28,25 @@ export const commentRoutes: FastifyPluginAsync<{ auth: AuthService; comments: Co
   )
 
   app.get(
+    '/comments/mine',
+    {
+      schema: {
+        tags: ['comments'],
+        summary: 'Riwayat komentar & balasan milik akun yang masuk (terbaru dulu) — wajib login',
+        description: 'Tiap item memuat `target` (`s:<id seri>` / `c:<id chapter>`). Paginasi: kirim `before` = id komentar terakhir yang sudah dimuat.',
+        querystring: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 }, before: { type: 'integer', minimum: 1 } } }
+      },
+      config: limit(60)
+    },
+    async (req, reply) => {
+      const user = await auth.me(req.headers.authorization)
+      const q = req.query as { limit?: number; before?: number }
+      void reply.header('cache-control', 'no-store')
+      return { data: await comments.mine(user.id, q.limit ?? 20, q.before) }
+    }
+  )
+
+  app.get(
     '/comments/:id/replies',
     {
       schema: {

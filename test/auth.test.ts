@@ -58,6 +58,11 @@ function fakes() {
         if (setUser) { u.username = username; u.changedAt = clock.now }
         return { rows: [{ ...u, usernameCooldownSec: cooldown(u) }] }
       }
+      if (sql.startsWith('DELETE FROM users WHERE id = $1')) {
+        const i = users.findIndex(u => u.id === p[0])
+        if (i >= 0) users.splice(i, 1)
+        return { rowCount: i >= 0 ? 1 : 0, rows: [] }
+      }
       if (sql.includes('lower(username) = lower($1)')) return { rows: users.filter(u => u.username.toLowerCase() === p[0].toLowerCase() || u.email?.toLowerCase() === p[0].toLowerCase()).slice(0, 1) }
       if (sql.includes('WHERE id = $1')) return { rows: users.filter(u => u.id === p[0]).map(u => ({ ...u, usernameCooldownSec: cooldown(u) })) }
       throw new Error(`sql tak dikenal: ${sql}`)
@@ -129,4 +134,14 @@ test('profil: ganti nama bebas, username sekali per 7 hari', async () => {
   // lewat 7 hari -> boleh lagi
   clock.now += 5 * DAY
   assert.equal((await svc.updateProfile(a.user.id, { username: 'budi2' })).username, 'budi2')
+})
+
+test('hapus akun: akun hilang, token lama tidak berlaku, hapus ulang ditolak', async () => {
+  const f = fakes()
+  const svc = new AuthService(f.pool as any, cfg, log)
+  const a = await svc.register('budi', 'budi@mail.com', 'password1')
+  await svc.deleteAccount(a.user.id)
+  assert.equal(f.users.length, 0)
+  await assert.rejects(svc.me(`Bearer ${a.token}`), /Akun tidak ditemukan/)
+  await assert.rejects(svc.deleteAccount(a.user.id), /Akun tidak ditemukan/)
 })

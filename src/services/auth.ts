@@ -181,6 +181,14 @@ export class AuthService {
     return new AppError(429, 'USERNAME_COOLDOWN', `Username baru bisa diganti lagi dalam ${formatCooldown(sec)}`)
   }
 
+  // ------------------------------------------------------------------ hapus akun
+
+  /** Hapus akun permanen. Komentar, suara, dan riwayat XP ikut terhapus (ON DELETE CASCADE); tag "membalas" di balasan orang lain dikosongkan. */
+  async deleteAccount(userId: number): Promise<void> {
+    const { rowCount } = await this.pool.query('DELETE FROM users WHERE id = $1', [userId])
+    if (!rowCount) throw new UnauthorizedError('Akun tidak ditemukan')
+  }
+
   // ------------------------------------------------------------------ foto profil
 
   async setAvatar(userId: number, jpeg: Buffer): Promise<AuthUser> {

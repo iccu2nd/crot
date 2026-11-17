@@ -48,6 +48,10 @@ function fakePool() {
       }
       if (sql.startsWith('SELECT id, target, parent_id, user_id FROM comments')) return { rows: rows.filter(c => c.id === p[0]) }
       if (sql.startsWith('SELECT user_id FROM comments')) return { rows: rows.filter(c => c.id === p[0]) }
+      if (sql.includes('WHERE c.user_id = $1')) {
+        const out = rows.filter(c => c.user_id === p[0] && (p[1] == null || c.id < p[1])).sort((a, b) => b.id - a.id).slice(0, p[2])
+        return { rows: out.map(c => ({ ...join(c, p[0]), target: c.target })) }
+      }
       if (sql.includes('WHERE c.id = $1')) return { rows: rows.filter(c => c.id === p[0]).map(c => join(c, p[1])) }
       if (sql.includes('WHERE c.target = $1 AND')) {
         const out = rows.filter(c => c.target === p[0] && c.parent_id == null && (p[1] == null || c.id < p[1])).sort((a, b) => b.id - a.id).slice(0, p[2])
@@ -58,6 +62,7 @@ function fakePool() {
         return { rows: out.map(c => join(c, p[3])) }
       }
       if (sql.startsWith('SELECT count(*)::int AS n FROM comments WHERE parent_id')) return { rows: [{ n: rows.filter(c => c.parent_id === p[0]).length }] }
+      if (sql.startsWith('SELECT count(*)::int AS n FROM comments WHERE user_id')) return { rows: [{ n: rows.filter(c => c.user_id === p[0]).length }] }
       if (sql.startsWith('SELECT count(*)::int AS n FROM comments WHERE target')) return { rows: [{ n: rows.filter(c => c.target === p[0]).length }] }
       if (sql.startsWith('DELETE FROM comment_votes')) {
         const i = votes.findIndex(v => v.comment_id === p[0] && v.user_id === p[1])
@@ -133,6 +138,23 @@ test('balasan: menempel ke komentar teratas, "membalas" hanya untuk balasan, daf
   const rep2 = await svc.replies(top.id, 1, rep.items[0].id)
   assert.deepEqual(rep2.items.map(i => i.body), ['balas si andi'])
   assert.equal(rep2.hasMore, false)
+})
+
+test('riwayat komentar: hanya milik sendiri (termasuk balasan), terbaru dulu, memuat target, paginasi', async () => {
+  const svc = new CommentService(fakePool() as any)
+  const top = await svc.add(2, 's:lumos:seri-1', 'milik andi')
+  await svc.add(1, 's:lumos:seri-1', 'satu')
+  await svc.add(1, 'c:lumos:bab-9', 'dua')
+  await svc.add(1, 's:lumos:seri-1', 'balasan tiga', top.id)
+
+  const p1 = await svc.mine(1, 2)
+  assert.equal(p1.total, 3)
+  assert.equal(p1.hasMore, true)
+  assert.deepEqual(p1.items.map(i => [i.body, i.target, i.parentId === null]), [['balasan tiga', 's:lumos:seri-1', false], ['dua', 'c:lumos:bab-9', true]])
+  const p2 = await svc.mine(1, 2, p1.items.at(-1)!.id)
+  assert.equal(p2.hasMore, false)
+  assert.deepEqual(p2.items.map(i => i.body), ['satu'])
+  assert.deepEqual((await svc.mine(99)).items, [])
 })
 
 test('like/dislike: satu suara per pengguna, bisa ganti & batal, myVote sesuai pemirsa', async () => {

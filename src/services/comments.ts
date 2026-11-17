@@ -35,7 +35,7 @@ const toItem = (r: any): CommentItem => ({
 })
 
 /** Kolom komentar + penulis + jumlah like/dislike/balasan + suara pemirsa (`viewer` = placeholder id pemirsa, mis. '$4'). */
-const select = (viewer: string) => `SELECT c.id, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.display_name, u.xp,
+const select = (viewer: string) => `SELECT c.id, c.target, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.display_name, u.xp,
                 CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v,
                 COALESCE(NULLIF(ru.display_name, ''), ru.username) AS reply_to_name,
                 (SELECT count(*)::int FROM comment_votes v WHERE v.comment_id = c.id AND v.value = 1) AS likes,
@@ -43,6 +43,11 @@ const select = (viewer: string) => `SELECT c.id, c.body, c.created_at, c.parent_
                 COALESCE((SELECT v.value FROM comment_votes v WHERE v.comment_id = c.id AND v.user_id = ${viewer}::int), 0)::int AS my_vote,
                 (SELECT count(*)::int FROM comments r WHERE r.parent_id = c.id) AS reply_count
                 FROM comments c JOIN users u ON u.id = c.user_id LEFT JOIN users ru ON ru.id = c.reply_to_user_id`
+
+/** Komentar milik sendiri: sama seperti CommentItem + `target` (s:… / c:…) supaya app tahu di mana komentar itu ditulis. */
+export interface MyCommentItem extends CommentItem {
+  target: string
+}
 
 const clampLimit = (limit: number) => Math.min(Math.max(Math.floor(limit) || 20, 1), 50)
 
@@ -120,6 +125,16 @@ export class CommentService {
     if (value === 1 && author !== userId) await this.xp?.award(author, 'liked', `${id}:${userId}`).catch(() => 0)
     const { rows } = await this.pool.query('SELECT count(*) FILTER (WHERE value = 1)::int AS likes, count(*) FILTER (WHERE value = -1)::int AS dislikes FROM comment_votes WHERE comment_id = $1', [id])
     return { likes: Number(rows[0]?.likes ?? 0), dislikes: Number(rows[0]?.dislikes ?? 0), myVote: value }
+  }
+
+  /** Riwayat komentar & balasan milik `userId`, terbaru dulu; lanjut dengan `before` = id terakhir yang sudah dimuat. */
+  async mine(userId: number, limit = 20, before?: number): Promise<{ total: number; hasMore: boolean; items: MyCommentItem[] }> {
+    const n = clampLimit(limit)
+    const [items, total] = await Promise.all([
+      this.pool.query(`${select('$1')} WHERE c.user_id = $1 AND ($2::bigint IS NULL OR c.id < $2) ORDER BY c.id DESC LIMIT $3`, [userId, before ?? null, n + 1]),
+      this.pool.query('SELECT count(*)::int AS n FROM comments WHERE user_id = $1', [userId])
+    ])
+    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(r => ({ ...toItem(r), target: String(r.target) })) }
   }
 
   /** Hanya penulis yang bisa menghapus komentarnya (balasan & suara ikut terhapus). */
