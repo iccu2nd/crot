@@ -18,7 +18,7 @@ export interface CommentItem {
   myVote: number
   /** jumlah balasan (hanya relevan untuk komentar teratas) */
   replyCount: number
-  user: { id: number; username: string; displayName: string; avatarV: number; level: number; verified: boolean; isOwner: boolean }
+  user: { id: number; username: string; displayName: string; avatarV: number; level: number; verified: boolean; isOwner: boolean; premium: boolean }
 }
 
 const toItem = (r: any, ownerEmails: string[] = []): CommentItem => {
@@ -34,12 +34,12 @@ const toItem = (r: any, ownerEmails: string[] = []): CommentItem => {
   dislikes: Number(r.dislikes ?? 0),
   myVote: Number(r.my_vote ?? 0),
   replyCount: Number(r.reply_count ?? 0),
-  user: { id: Number(r.uid), username: r.username, displayName: r.display_name ?? '', avatarV: Number(r.avatar_v ?? 0), level: levelFor(Number(r.xp ?? 0)).level, verified: r.verified === true || isOwner, isOwner }
+  user: { id: Number(r.uid), username: r.username, displayName: r.display_name ?? '', avatarV: Number(r.avatar_v ?? 0), level: levelFor(Number(r.xp ?? 0)).level, verified: r.verified === true || isOwner, isOwner, premium: r.premium === true }
   }
 }
 
 /** Kolom komentar + penulis + jumlah like/dislike/balasan + suara pemirsa (`viewer` = placeholder id pemirsa, mis. '$4'). */
-const select = (viewer: string) => `SELECT c.id, c.target, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified,
+const select = (viewer: string) => `SELECT c.id, c.target, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, u.premium,
                 CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v,
                 COALESCE(NULLIF(ru.display_name, ''), ru.username) AS reply_to_name,
                 (SELECT count(*)::int FROM comment_votes v WHERE v.comment_id = c.id AND v.value = 1) AS likes,

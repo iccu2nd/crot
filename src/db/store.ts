@@ -654,7 +654,7 @@ export class PgStore implements Store {
   }
 
   /** Kolom user untuk panel admin (+ status moderasi). */
-  private static readonly ADMIN_USER_COLS = `u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified,
+  private static readonly ADMIN_USER_COLS = `u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.premium,
               u.created_at AS "createdAt", CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
               u.banned_at AS "bannedAt", u.ban_reason AS "banReason", u.muted_until AS "mutedUntil", u.mute_reason AS "muteReason",
               (SELECT COUNT(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"`
@@ -670,6 +670,7 @@ export class PgStore implements Store {
       bio: (r.bio ?? '') as string,
       xp: Number(r.xp ?? 0),
       verified: r.verified === true || (!!email && ownerEmails.includes(email)), // owner otomatis terverifikasi
+      premium: r.premium === true,
       avatarV: Number(r.avatarV ?? 0),
       hasAvatar: r.avatarV != null && Number(r.avatarV) > 0 && r.hasAvatar !== false,
       commentCount: Number(r.commentCount ?? 0),
@@ -682,7 +683,7 @@ export class PgStore implements Store {
     }
   }
 
-  /** `filter`: banned | muted | verified | avatar (punya foto) — kosong = semua. */
+  /** `filter`: banned | muted | verified | premium | avatar (punya foto) — kosong = semua. */
   async adminListUsers(opts: { q?: string; filter?: string; limit: number; offset: number; ownerEmails?: string[] }) {
     const params: unknown[] = []
     const where: string[] = []
@@ -693,6 +694,7 @@ export class PgStore implements Store {
     if (opts.filter === 'banned') where.push('u.banned_at IS NOT NULL')
     else if (opts.filter === 'muted') where.push('u.muted_until > now()')
     else if (opts.filter === 'verified') where.push('u.verified = true')
+    else if (opts.filter === 'premium') where.push('u.premium = true')
     else if (opts.filter === 'avatar') where.push('u.avatar IS NOT NULL')
     const w = where.length ? `WHERE ${where.join(' AND ')}` : ''
     params.push(opts.limit, opts.offset)
@@ -722,7 +724,7 @@ export class PgStore implements Store {
    */
   async adminModerateUser(
     userId: number,
-    p: { verified?: boolean; banned?: boolean; banReason?: string | null; muted?: boolean; muteDays?: number | null; muteReason?: string | null; clearBio?: boolean; clearName?: boolean },
+    p: { verified?: boolean; premium?: boolean; banned?: boolean; banReason?: string | null; muted?: boolean; muteDays?: number | null; muteReason?: string | null; clearBio?: boolean; clearName?: boolean },
     ownerEmails: string[] = []
   ) {
     const cur = await this.adminGetUser(userId, ownerEmails)
@@ -732,6 +734,7 @@ export class PgStore implements Store {
     const params: unknown[] = [userId]
     const add = (col: string, v: unknown) => { params.push(v); sets.push(`${col} = $${params.length}`) }
     if (p.verified !== undefined) add('verified', p.verified)
+    if (p.premium !== undefined) add('premium', p.premium)
     if (p.banned === true) { sets.push('banned_at = now()'); add('ban_reason', (p.banReason ?? '').trim().slice(0, 200) || null) }
     else if (p.banned === false) sets.push('banned_at = NULL', 'ban_reason = NULL')
     if (p.muted === true) {

@@ -25,6 +25,8 @@ export interface AuthUser {
   verified: boolean
   /** true jika email akun ada di OWNER_EMAILS (panel admin) */
   isOwner: boolean
+  /** Premium Member (ditetapkan owner lewat panel admin) */
+  premium: boolean
   /** dibisukan sampai kapan (epoch ms); 0 = tidak dibisukan. Selama dibisukan tidak bisa berkomentar. */
   mutedUntil: number
   /** alasan bisu dari owner ('' bila tidak ada) */
@@ -43,8 +45,10 @@ export interface PublicProfile {
   joinedAt: number
   commentCount: number
   verified: boolean
-  /** true bila email ada di OWNER_EMAILS — role Owner di app */
+  /** true bila email ada di OWNER_EMAILS — label Owner MiToon di app */
   isOwner: boolean
+  /** Premium Member */
+  premium: boolean
 }
 export interface AuthResult {
   token: string
@@ -55,9 +59,9 @@ type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: strin
 const BAD_LOGIN = 'Username/email atau password salah'
 /** Username hanya boleh diganti sekali per 7 hari. */
 export const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
+const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
 
-type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }
+type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }
 /** Waktu bisu (epoch ms) bila masih berlaku, selain itu 0. */
 const mutedUntilMs = (v: Date | string | null | undefined, now = Date.now()): number => {
   const t = v ? new Date(v).getTime() : 0
@@ -77,6 +81,7 @@ const toUser = (r: Row, ownerEmails: string[] = []): AuthUser => {
   avatarV: Number(r.avatarV ?? 0),
   verified: r.verified === true || isOwner,
   isOwner,
+  premium: r.premium === true,
   mutedUntil: mutedUntilMs(r.mutedUntil),
   muteReason: r.muteReason ?? '',
   usernameCooldownSec: Number(r.usernameCooldownSec ?? 0),
@@ -253,7 +258,7 @@ export class AuthService {
 
   async publicProfile(userId: number): Promise<PublicProfile> {
     const { rows } = await this.pool.query(
-      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.created_at AS "createdAt",
+      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.premium, u.created_at AS "createdAt",
               CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
               (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"
          FROM users u WHERE u.id = $1`,
@@ -275,7 +280,8 @@ export class AuthService {
       joinedAt: new Date(r.createdAt).getTime(),
       commentCount: Number(r.commentCount ?? 0),
       verified: r.verified === true || isOwner,
-      isOwner
+      isOwner,
+      premium: r.premium === true
     }
   }
 

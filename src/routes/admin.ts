@@ -199,7 +199,7 @@ export const adminRoutes: FastifyPluginAsync<{
           type: 'object',
           properties: {
             q: { type: 'string', maxLength: 200 },
-            filter: { type: 'string', enum: ['', 'banned', 'muted', 'verified', 'avatar'] },
+            filter: { type: 'string', enum: ['', 'banned', 'muted', 'verified', 'premium', 'avatar'] },
             page: { type: 'integer', minimum: 1, default: 1 },
             limit: { type: 'integer', minimum: 1, maximum: 100, default: 30 }
           }
@@ -230,10 +230,10 @@ export const adminRoutes: FastifyPluginAsync<{
     }
   )
 
-  /** Moderasi: centang verified, blokir/buka blokir, bisukan/buka bisu, reset nama/bio. Balasan = user terbaru. */
+  /** Moderasi: centang verified, Premium Member, blokir/buka blokir, bisukan/buka bisu, reset nama/bio. Balasan = user terbaru. */
   app.patch<{
     Params: { id: number }
-    Body: { verified?: boolean; banned?: boolean; banReason?: string; muted?: boolean; muteDays?: number; muteReason?: string; clearBio?: boolean; clearName?: boolean }
+    Body: { verified?: boolean; premium?: boolean; banned?: boolean; banReason?: string; muted?: boolean; muteDays?: number; muteReason?: string; clearBio?: boolean; clearName?: boolean }
   }>(
     '/admin/users/:id',
     {
@@ -248,6 +248,7 @@ export const adminRoutes: FastifyPluginAsync<{
           minProperties: 1,
           properties: {
             verified: { type: 'boolean' },
+            premium: { type: 'boolean' },
             banned: { type: 'boolean' },
             banReason: { type: 'string', maxLength: 200 },
             muted: { type: 'boolean' },
