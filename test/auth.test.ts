@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { checkRegistration, hashPassword, signToken, slugUsername, verifyPassword, verifyToken } from '../src/core/auth.js'
+import { checkRegistration, formatCooldown, hashPassword, signToken, slugUsername, verifyPassword, verifyToken } from '../src/core/auth.js'
 import { AuthService } from '../src/services/auth.js'
 
 test('password: hash unik per panggilan, verifikasi benar/salah', async () => {
@@ -34,6 +34,9 @@ test('validasi registrasi & slug username', () => {
 })
 
 // ---- service dengan pool tiruan ----
+const DAY = 86_400_000
+const clock = { now: 1_700_000_000_000 }
+const cooldown = (u: any) => (u.changedAt ? Math.max(0, Math.ceil((u.changedAt + 7 * DAY - clock.now) / 1000)) : 0)
 function fakes() {
   const users: any[] = []
   const pool = {
@@ -44,8 +47,19 @@ function fakes() {
         users.push(u)
         return { rows: [u] }
       }
+      if (sql.startsWith('UPDATE users SET\n           display_name')) {
+        const [id, setName, name, setUser, username] = p
+        const u = users.find(x => x.id === id)
+        if (!u) return { rows: [] }
+        const cd = cooldown(u)
+        if (setUser && cd > 0) return { rows: [] }
+        if (setUser && users.some(o => o.id !== id && o.username.toLowerCase() === String(username).toLowerCase())) throw Object.assign(new Error('dup'), { code: '23505', constraint: 'users_username_lower' })
+        if (setName) u.displayName = name
+        if (setUser) { u.username = username; u.changedAt = clock.now }
+        return { rows: [{ ...u, usernameCooldownSec: cooldown(u) }] }
+      }
       if (sql.includes('lower(username) = lower($1)')) return { rows: users.filter(u => u.username.toLowerCase() === p[0].toLowerCase() || u.email?.toLowerCase() === p[0].toLowerCase()).slice(0, 1) }
-      if (sql.includes('WHERE id = $1')) return { rows: users.filter(u => u.id === p[0]) }
+      if (sql.includes('WHERE id = $1')) return { rows: users.filter(u => u.id === p[0]).map(u => ({ ...u, usernameCooldownSec: cooldown(u) })) }
       throw new Error(`sql tak dikenal: ${sql}`)
     }
   }
@@ -73,4 +87,46 @@ test('login Google tidak aktif bila tidak dikonfigurasi', async () => {
   const f = fakes()
   const svc = new AuthService(f.pool as any, { ...cfg, googleClientId: '' }, log)
   await assert.rejects(svc.google('abc'), /belum dikonfigurasi/)
+})
+
+test('formatCooldown: hari/jam/menit', () => {
+  assert.equal(formatCooldown(6 * 86400 + 3 * 3600), '6 hari 3 jam')
+  assert.equal(formatCooldown(2 * 86400), '2 hari')
+  assert.equal(formatCooldown(5 * 3600 + 12 * 60), '5 jam 12 menit')
+  assert.equal(formatCooldown(12 * 60), '12 menit')
+  assert.equal(formatCooldown(10), '1 menit')
+  assert.equal(formatCooldown(0), 'kurang dari 1 menit')
+})
+
+test('profil: ganti nama bebas, username sekali per 7 hari', async () => {
+  const f = fakes()
+  clock.now = 1_700_000_000_000
+  const svc = new AuthService(f.pool as any, cfg, log)
+  const a = await svc.register('budi', 'budi@mail.com', 'password1')
+  await svc.register('andi', 'andi@mail.com', 'password1')
+
+  // nama: dipangkas spasi, kosong = hapus, >30 / karakter kontrol ditolak
+  assert.equal((await svc.updateProfile(a.user.id, { displayName: '  Budi   Santoso ' })).displayName, 'Budi Santoso')
+  assert.equal((await svc.updateProfile(a.user.id, { displayName: '' })).displayName, '')
+  await assert.rejects(svc.updateProfile(a.user.id, { displayName: 'x'.repeat(31) }), /maksimal 30/)
+  await assert.rejects(svc.updateProfile(a.user.id, { displayName: 'a\u0007b' }), /tidak valid/)
+  await assert.rejects(svc.updateProfile(a.user.id, {}), /Tidak ada perubahan/)
+
+  // username: format, bentrok, lalu berhasil -> cooldown aktif
+  await assert.rejects(svc.updateProfile(a.user.id, { username: 'a!' }), /Username 3–20/)
+  await assert.rejects(svc.updateProfile(a.user.id, { username: 'ANDI' }), /sudah dipakai/)
+  const same = await svc.updateProfile(a.user.id, { username: 'budi' })
+  assert.equal(same.usernameCooldownSec, 0) // sama persis: bukan penggantian
+  const changed = await svc.updateProfile(a.user.id, { username: 'budi_baru' })
+  assert.equal(changed.username, 'budi_baru')
+  assert.equal(changed.usernameCooldownSec, 7 * 86400)
+
+  // selama cooldown ditolak (429) dengan sisa waktu; nama tetap bisa diganti
+  clock.now += 2 * DAY + 3 * 3600 * 1000
+  await assert.rejects(svc.updateProfile(a.user.id, { username: 'budi2' }), /dalam 4 hari 21 jam/)
+  assert.equal((await svc.updateProfile(a.user.id, { displayName: 'Budi' })).displayName, 'Budi')
+
+  // lewat 7 hari -> boleh lagi
+  clock.now += 5 * DAY
+  assert.equal((await svc.updateProfile(a.user.id, { username: 'budi2' })).username, 'budi2')
 })

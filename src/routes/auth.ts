@@ -44,17 +44,6 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     }
   )
 
-  app.put('/auth/me/profile', { schema: { tags: ['auth'], summary: 'Ubah nama tampilan dan username', body: { type: 'object', properties: { displayName: str(40), username: str(20) } } }, config: limit(5) }, async (req, reply) => {
-    const user = await auth.me(req.headers.authorization); reply200(reply)
-    return { data: await auth.updateProfile(user.id, req.body as { displayName?: string; username?: string }) }
-  })
-
-  app.post('/auth/me/xp/read', { schema: { tags: ['auth'], summary: 'Catat aktivitas membaca chapter', body: { type: 'object', required: ['chapterId'], properties: { chapterId: str(330) } } }, config: limit(30) }, async (req, reply) => {
-    const user = await auth.me(req.headers.authorization); const chapterId = String((req.body as {chapterId:string}).chapterId || '')
-    if (!chapterId || chapterId.length > 330 || /[\u0000-\u001f]/.test(chapterId)) throw new ValidationError('Chapter tidak valid')
-    await auth.awardXp(user.id, `read:${chapterId}`, 15); reply200(reply); return { data: await auth.me(req.headers.authorization) }
-  })
-
   // ---- foto profil: JPEG mentah (app sudah memotong persegi & mengecilkan ke ±384px) ----
   app.addContentTypeParser('image/jpeg', { parseAs: 'buffer', bodyLimit: MAX_AVATAR_BYTES }, (_req, body, done) => done(null, body))
 
@@ -81,6 +70,24 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
       const buf = await auth.avatarOf((req.params as { id: number }).id)
       if (!buf) throw new NotFoundError('Belum ada foto profil')
       return reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=31536000, immutable').send(buf)
+    }
+  )
+
+  app.patch(
+    '/auth/me',
+    {
+      schema: {
+        tags: ['auth'],
+        summary: 'Ubah nama tampilan dan/atau username (username: cooldown 7 hari)',
+        body: { type: 'object', properties: { displayName: { type: ['string', 'null'], maxLength: 200 }, username: { type: ['string', 'null'], maxLength: 60 } } }
+      },
+      config: limit(10)
+    },
+    async (req, reply) => {
+      const user = await auth.me(req.headers.authorization)
+      const b = (req.body ?? {}) as { displayName?: string | null; username?: string | null }
+      reply200(reply)
+      return { data: await auth.updateProfile(user.id, b) }
     }
   )
 

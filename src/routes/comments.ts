@@ -22,32 +22,63 @@ export const commentRoutes: FastifyPluginAsync<{ auth: AuthService; comments: Co
     },
     async (req, reply) => {
       const q = req.query as { target: string; limit?: number; before?: number }
-      const authHeader = req.headers.authorization; const viewer = authHeader ? await auth.me(authHeader).catch(() => null) : null
       void reply.header('cache-control', 'no-store')
-      return { data: await comments.list(q.target, q.limit ?? 20, q.before, viewer?.id ?? null) }
+      return { data: await comments.list(q.target, q.limit ?? 20, q.before, auth.viewerId(req.headers.authorization)) }
+    }
+  )
+
+  app.get(
+    '/comments/:id/replies',
+    {
+      schema: {
+        tags: ['comments'],
+        summary: 'Balasan sebuah komentar (lama → baru)',
+        description: 'Paginasi: kirim `after` = id balasan terakhir yang sudah dimuat.',
+        params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } } },
+        querystring: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 }, after: { type: 'integer', minimum: 0 } } }
+      },
+      config: limit(90)
+    },
+    async (req, reply) => {
+      const q = req.query as { limit?: number; after?: number }
+      void reply.header('cache-control', 'no-store')
+      return { data: await comments.replies((req.params as { id: number }).id, q.limit ?? 20, q.after ?? 0, auth.viewerId(req.headers.authorization)) }
+    }
+  )
+
+  app.put(
+    '/comments/:id/vote',
+    {
+      schema: {
+        tags: ['comments'],
+        summary: 'Like (1), dislike (-1), atau batalkan (0) — wajib login',
+        params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } } },
+        body: { type: 'object', required: ['value'], properties: { value: { type: 'integer', minimum: -1, maximum: 1 } } }
+      },
+      config: limit(60)
+    },
+    async (req, reply) => {
+      const user = await auth.me(req.headers.authorization)
+      void reply.header('cache-control', 'no-store')
+      return { data: await comments.vote(user.id, (req.params as { id: number }).id, (req.body as { value: number }).value) }
     }
   )
 
   app.post(
     '/comments',
     {
-      schema: { tags: ['comments'], summary: 'Kirim komentar (wajib login)', body: { type: 'object', required: ['target', 'body'], properties: { target: { type: 'string', maxLength: 330 }, body: { type: 'string', maxLength: 4000 }, parentId: { type: 'integer', minimum: 1 } } } },
+      schema: { tags: ['comments'], summary: 'Kirim komentar atau balasan (`parentId` = id komentar yang dibalas) — wajib login', body: { type: 'object', required: ['target', 'body'], properties: { target: { type: 'string', maxLength: 330 }, body: { type: 'string', maxLength: 4000 }, parentId: { type: ['integer', 'null'], minimum: 1 } } } },
       config: limit(10)
     },
     async (req, reply) => {
       const user = await auth.me(req.headers.authorization)
-      const b = req.body as { target: string; body: string; parentId?: number }
+      const b = req.body as { target: string; body: string; parentId?: number | null }
       const item = await comments.add(user.id, b.target, b.body, b.parentId)
-      await auth.awardXp(user.id, `comment:${item.id}`, b.parentId ? 4 : 8)
       void reply.header('cache-control', 'no-store')
-      return { data: item }
+      // `me` = akun terbaru (XP/level setelah komentar) supaya app tak perlu request tambahan
+      return { data: item, me: await auth.me(req.headers.authorization) }
     }
   )
-
-  app.post('/comments/:id/reaction', { schema: { tags: ['comments'], summary: 'Like/dislike komentar', body: { type: 'object', required: ['kind'], properties: { kind: { type: ['string','null'], enum: ['like','dislike',null] } } } }, config: limit(60) }, async (req, reply) => {
-    const user = await auth.me(req.headers.authorization); const id = Number((req.params as {id:string}).id); const b = req.body as {kind:'like'|'dislike'|null}
-    const data = await comments.react(user.id,id,b.kind); void reply.header('cache-control','no-store'); return {data}
-  })
 
   app.delete(
     '/comments/:id',

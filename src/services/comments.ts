@@ -1,52 +1,130 @@
 import type { Pool } from 'pg'
 import { checkTarget, cleanComment } from '../core/comments.js'
 import { NotFoundError, ValidationError } from '../core/errors.js'
+import { levelFor } from '../core/xp.js'
+import type { XpService } from './xp.js'
 
 export interface CommentItem {
-  id: number; body: string; createdAt: number; parentId: number | null
-  likes: number; dislikes: number; myReaction: 'like' | 'dislike' | null
-  user: { id: number; username: string; displayName: string; avatarV: number; xp: number; level: number }
+  id: number
+  body: string
+  createdAt: number
+  /** id komentar teratas bila ini balasan; null bila komentar teratas */
+  parentId: number | null
+  /** nama yang dibalas (hanya bila membalas sebuah balasan); '' bila tidak ada */
+  replyTo: string
+  likes: number
+  dislikes: number
+  /** suara pemirsa: 1 = like, -1 = dislike, 0 = belum memilih */
+  myVote: number
+  /** jumlah balasan (hanya relevan untuk komentar teratas) */
+  replyCount: number
+  user: { id: number; username: string; displayName: string; avatarV: number; level: number }
 }
-const xpForLevel = (level:number) => Math.max(0,Math.floor((level-1)*(100+level*35)/2))
-const levelForXp = (xp:number) => { let level=1; while(level<999 && xp>=xpForLevel(level+1)) level++; return level }
+
 const toItem = (r: any): CommentItem => ({
-  id: Number(r.id), body: r.body, createdAt: new Date(r.created_at).getTime(), parentId: r.parent_id == null ? null : Number(r.parent_id),
-  likes: Number(r.likes ?? 0), dislikes: Number(r.dislikes ?? 0), myReaction: r.my_reaction ?? null,
-  user: { id: Number(r.uid), username: r.username, displayName: r.display_name || r.username, avatarV: Number(r.avatar_v ?? 0), xp: Number(r.xp ?? 0), level: levelForXp(Number(r.xp ?? 0)) }
+  id: Number(r.id),
+  body: r.body,
+  createdAt: new Date(r.created_at).getTime(),
+  parentId: r.parent_id == null ? null : Number(r.parent_id),
+  replyTo: r.reply_to_name ?? '',
+  likes: Number(r.likes ?? 0),
+  dislikes: Number(r.dislikes ?? 0),
+  myVote: Number(r.my_vote ?? 0),
+  replyCount: Number(r.reply_count ?? 0),
+  user: { id: Number(r.uid), username: r.username, displayName: r.display_name ?? '', avatarV: Number(r.avatar_v ?? 0), level: levelFor(Number(r.xp ?? 0)).level }
 })
-const SELECT = `SELECT c.id,c.body,c.created_at,c.parent_id,u.id AS uid,u.username,u.display_name,u.xp,
- CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v,
- (SELECT count(*)::int FROM comment_reactions r WHERE r.comment_id=c.id AND r.kind='like') AS likes,
- (SELECT count(*)::int FROM comment_reactions r WHERE r.comment_id=c.id AND r.kind='dislike') AS dislikes,
- (SELECT kind FROM comment_reactions r WHERE r.comment_id=c.id AND r.user_id=$2) AS my_reaction
- FROM comments c JOIN users u ON u.id=c.user_id`
+
+/** Kolom komentar + penulis + jumlah like/dislike/balasan + suara pemirsa (`viewer` = placeholder id pemirsa, mis. '$4'). */
+const select = (viewer: string) => `SELECT c.id, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.display_name, u.xp,
+                CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v,
+                COALESCE(NULLIF(ru.display_name, ''), ru.username) AS reply_to_name,
+                (SELECT count(*)::int FROM comment_votes v WHERE v.comment_id = c.id AND v.value = 1) AS likes,
+                (SELECT count(*)::int FROM comment_votes v WHERE v.comment_id = c.id AND v.value = -1) AS dislikes,
+                COALESCE((SELECT v.value FROM comment_votes v WHERE v.comment_id = c.id AND v.user_id = ${viewer}::int), 0)::int AS my_vote,
+                (SELECT count(*)::int FROM comments r WHERE r.parent_id = c.id) AS reply_count
+                FROM comments c JOIN users u ON u.id = c.user_id LEFT JOIN users ru ON ru.id = c.reply_to_user_id`
+
+const clampLimit = (limit: number) => Math.min(Math.max(Math.floor(limit) || 20, 1), 50)
+
+export interface VoteResult {
+  likes: number
+  dislikes: number
+  myVote: number
+}
+
+/**
+ * Komentar per target (seri / chapter): terbaru dulu, paginasi keyset (`before` = id terakhir yang sudah dimuat).
+ * Balasan 1 tingkat: selalu menempel ke komentar teratas (urut lama → baru). Like/dislike per pengguna.
+ */
 export class CommentService {
-  constructor(private readonly pool: Pool) {}
-  async list(target: unknown, limit = 20, before?: number, viewerId: number | null = null): Promise<{ total: number; items: CommentItem[] }> {
-    const t = checkTarget(target), n = Math.min(Math.max(Math.floor(limit) || 20, 1), 50)
-    const [items,total] = await Promise.all([
-      this.pool.query(`${SELECT} WHERE c.target = $1 AND ($3::bigint IS NULL OR c.id < $3) ORDER BY c.id DESC LIMIT $4`,[t,viewerId,before ?? null,n]),
-      this.pool.query('SELECT count(*)::int AS n FROM comments WHERE target=$1',[t])
+  constructor(
+    private readonly pool: Pool,
+    private readonly xp?: XpService
+  ) {}
+
+  /** Komentar teratas. `total` = semua komentar + balasan (untuk judul); `hasMore` = masih ada halaman berikutnya. */
+  async list(target: unknown, limit = 20, before?: number, viewer: number | null = null): Promise<{ total: number; hasMore: boolean; items: CommentItem[] }> {
+    const t = checkTarget(target)
+    const n = clampLimit(limit)
+    const [items, total] = await Promise.all([
+      this.pool.query(`${select('$4')} WHERE c.target = $1 AND c.parent_id IS NULL AND ($2::bigint IS NULL OR c.id < $2) ORDER BY c.id DESC LIMIT $3`, [t, before ?? null, n + 1, viewer]),
+      this.pool.query('SELECT count(*)::int AS n FROM comments WHERE target = $1', [t])
     ])
-    return { total: total.rows[0]?.n ?? 0, items: items.rows.map(toItem) }
+    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(toItem) }
   }
-  async add(userId: number, target: unknown, body: unknown, parentId?: number | null): Promise<CommentItem> {
-    const t=checkTarget(target), text=cleanComment(body)
-    if (parentId != null) {
-      const parent=await this.pool.query('SELECT target FROM comments WHERE id=$1',[parentId])
-      if (!parent.rows[0] || parent.rows[0].target !== t) throw new NotFoundError('Komentar induk tidak ditemukan')
+
+  /** Balasan sebuah komentar teratas, lama → baru; lanjut dengan `after` = id balasan terakhir yang sudah dimuat. */
+  async replies(parentId: number, limit = 20, after = 0, viewer: number | null = null): Promise<{ total: number; hasMore: boolean; items: CommentItem[] }> {
+    const n = clampLimit(limit)
+    const [items, total] = await Promise.all([
+      this.pool.query(`${select('$4')} WHERE c.parent_id = $1 AND c.id > $2 ORDER BY c.id ASC LIMIT $3`, [parentId, after, n + 1, viewer]),
+      this.pool.query('SELECT count(*)::int AS n FROM comments WHERE parent_id = $1', [parentId])
+    ])
+    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(toItem) }
+  }
+
+  /**
+   * Kirim komentar, atau balasan bila `replyToId` diisi. Membalas sebuah balasan tetap menempel ke komentar teratasnya
+   * dan menyimpan siapa yang dibalas (tampil sebagai "Membalas …").
+   */
+  async add(userId: number, target: unknown, body: unknown, replyToId?: number | null): Promise<CommentItem> {
+    const t = checkTarget(target)
+    const text = cleanComment(body)
+    let parentId: number | null = null
+    let replyToUser: number | null = null
+    if (replyToId != null) {
+      const { rows: pr } = await this.pool.query('SELECT id, target, parent_id, user_id FROM comments WHERE id = $1', [replyToId])
+      const p = pr[0]
+      if (!p) throw new NotFoundError('Komentar yang dibalas tidak ditemukan')
+      if (p.target !== t) throw new ValidationError('Balasan harus di halaman yang sama')
+      if (p.parent_id == null) parentId = Number(p.id)
+      else {
+        parentId = Number(p.parent_id)
+        replyToUser = Number(p.user_id)
+      }
     }
-    const {rows}=await this.pool.query('INSERT INTO comments(target,user_id,body,parent_id) VALUES($1,$2,$3,$4) RETURNING id',[t,userId,text,parentId ?? null])
-    const full=await this.pool.query(`${SELECT} WHERE c.id = $1`,[rows[0].id,userId])
+    const { rows } = await this.pool.query('INSERT INTO comments (target, user_id, body, parent_id, reply_to_user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id', [t, userId, text, parentId, replyToUser])
+    await this.xp?.award(userId, 'comment', String(rows[0].id)).catch(() => 0)
+    const full = await this.pool.query(`${select('$2')} WHERE c.id = $1`, [rows[0].id, userId])
     return toItem(full.rows[0])
   }
-  async react(userId:number,id:number,kind:unknown):Promise<{likes:number;dislikes:number;myReaction:string|null}> {
-    if (kind !== null && kind !== 'like' && kind !== 'dislike') throw new ValidationError('Reaksi tidak valid')
-    const exists=await this.pool.query('SELECT id FROM comments WHERE id=$1',[id]); if(!exists.rows[0]) throw new NotFoundError('Komentar tidak ditemukan')
-    if(kind===null) await this.pool.query('DELETE FROM comment_reactions WHERE comment_id=$1 AND user_id=$2',[id,userId])
-    else { const old=await this.pool.query('SELECT kind FROM comment_reactions WHERE comment_id=$1 AND user_id=$2',[id,userId]); if(old.rows[0]?.kind===kind) await this.pool.query('DELETE FROM comment_reactions WHERE comment_id=$1 AND user_id=$2',[id,userId]); else await this.pool.query(`INSERT INTO comment_reactions(comment_id,user_id,kind) VALUES($1,$2,$3) ON CONFLICT(comment_id,user_id) DO UPDATE SET kind=EXCLUDED.kind`,[id,userId,kind]) }
-    const {rows}=await this.pool.query(`SELECT count(*) FILTER(WHERE kind='like')::int likes,count(*) FILTER(WHERE kind='dislike')::int dislikes,max(kind) FILTER(WHERE user_id=$2) my_reaction FROM comment_reactions WHERE comment_id=$1`,[id,userId])
-    const r=rows[0]; return {likes:r.likes,dislikes:r.dislikes,myReaction:r.my_reaction}
+
+  /** Like (1), dislike (-1), atau batalkan (0). Penulis dapat XP kecil saat disukai orang lain. */
+  async vote(userId: number, id: number, value: unknown): Promise<VoteResult> {
+    if (value !== 1 && value !== -1 && value !== 0) throw new ValidationError('Suara harus 1, -1, atau 0')
+    const { rows: cr } = await this.pool.query('SELECT user_id FROM comments WHERE id = $1', [id])
+    if (!cr[0]) throw new NotFoundError('Komentar tidak ditemukan')
+    if (value === 0) await this.pool.query('DELETE FROM comment_votes WHERE comment_id = $1 AND user_id = $2', [id, userId])
+    else await this.pool.query('INSERT INTO comment_votes (comment_id, user_id, value) VALUES ($1, $2, $3) ON CONFLICT (comment_id, user_id) DO UPDATE SET value = EXCLUDED.value', [id, userId, value])
+    const author = Number(cr[0].user_id)
+    if (value === 1 && author !== userId) await this.xp?.award(author, 'liked', `${id}:${userId}`).catch(() => 0)
+    const { rows } = await this.pool.query('SELECT count(*) FILTER (WHERE value = 1)::int AS likes, count(*) FILTER (WHERE value = -1)::int AS dislikes FROM comment_votes WHERE comment_id = $1', [id])
+    return { likes: Number(rows[0]?.likes ?? 0), dislikes: Number(rows[0]?.dislikes ?? 0), myVote: value }
   }
-  async remove(userId:number,id:number):Promise<void>{const {rowCount}=await this.pool.query('DELETE FROM comments WHERE id=$1 AND user_id=$2',[id,userId]);if(!rowCount)throw new NotFoundError('Komentar tidak ditemukan')}
+
+  /** Hanya penulis yang bisa menghapus komentarnya (balasan & suara ikut terhapus). */
+  async remove(userId: number, id: number): Promise<void> {
+    const { rowCount } = await this.pool.query('DELETE FROM comments WHERE id = $1 AND user_id = $2', [id, userId])
+    if (!rowCount) throw new NotFoundError('Komentar tidak ditemukan')
+  }
 }

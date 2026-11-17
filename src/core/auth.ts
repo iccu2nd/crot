@@ -48,10 +48,11 @@ export function verifyToken(token: string, secret: string, now = Date.now()): { 
 
 // ---- validasi input (pesan Indonesia, ditampilkan langsung di app) ----
 export const USERNAME_RE = /^[A-Za-z0-9_.]{3,20}$/
+export const USERNAME_MSG = 'Username 3–20 karakter: huruf, angka, titik, atau garis bawah'
 export const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/
 
 export function checkRegistration(username: string, email: string, password: string): string | null {
-  if (!USERNAME_RE.test(username)) return 'Username 3–20 karakter: huruf, angka, titik, atau garis bawah'
+  if (!USERNAME_RE.test(username)) return USERNAME_MSG
   if (!EMAIL_RE.test(email) || email.length > 254) return 'Format email tidak valid'
   if (password.length < 8) return 'Password minimal 8 karakter'
   if (password.length > 128) return 'Password terlalu panjang (maks. 128)'
@@ -62,4 +63,15 @@ export function checkRegistration(username: string, email: string, password: str
 export function slugUsername(raw: string): string {
   const s = raw.replace(/[^A-Za-z0-9_.]+/g, '').slice(0, 16)
   return s.length >= 3 ? s : `user${s}`.slice(0, 16)
+}
+
+/** Sisa waktu cooldown yang ramah dibaca: "6 hari 3 jam", "5 jam 12 menit", "12 menit", "<1 menit". */
+export function formatCooldown(sec: number): string {
+  const m = Math.ceil(sec / 60)
+  const d = Math.floor(m / 1440)
+  const h = Math.floor((m % 1440) / 60)
+  const mm = m % 60
+  if (d > 0) return h > 0 ? `${d} hari ${h} jam` : `${d} hari`
+  if (h > 0) return mm > 0 ? `${h} jam ${mm} menit` : `${h} jam`
+  return m > 0 ? `${m} menit` : 'kurang dari 1 menit'
 }
