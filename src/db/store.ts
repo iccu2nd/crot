@@ -669,7 +669,7 @@ export class PgStore implements Store {
       displayName: (r.displayName ?? '') as string,
       bio: (r.bio ?? '') as string,
       xp: Number(r.xp ?? 0),
-      verified: r.verified === true,
+      verified: r.verified === true || (!!email && ownerEmails.includes(email)), // owner otomatis terverifikasi
       avatarV: Number(r.avatarV ?? 0),
       hasAvatar: r.avatarV != null && Number(r.avatarV) > 0 && r.hasAvatar !== false,
       commentCount: Number(r.commentCount ?? 0),

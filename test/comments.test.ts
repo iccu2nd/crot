@@ -221,22 +221,3 @@ test('XpService: ledger (sekali per ref + batas harian) dan validasi laporan dar
   await assert.rejects(svc.report(7, 'read', 'tanpa titik dua'), /Referensi/)
   await assert.rejects(svc.report(7, 'bookmark', undefined), /Referensi/)
 })
-
-test('top komentar: komentar owner disematkan di halaman pertama saja, tidak diulang di halaman berikutnya', async () => {
-  const row = (id: number, email: string | null) => ({ id, body: `k${id}`, created_at: new Date(1_700_000_000_000 + id), parent_id: null, uid: id, username: `u${id}`, email, xp: 0, avatar_v: 0 })
-  const calls: { sql: string; p: any[] }[] = []
-  const pool = {
-    async query(sql: string, p: any[] = []) {
-      calls.push({ sql, p })
-      if (sql.includes('ANY($2::text[])')) return { rows: [row(5, 'owner@x.id')] }
-      if (sql.includes('NOT (c.id = ANY($5::bigint[]))')) return { rows: [row(9, null), row(7, null)] }
-      return { rows: [{ n: 3 }] }
-    }
-  }
-  const svc = new CommentService(pool as any, undefined, ['owner@x.id'])
-  const first = await svc.list('s:lumos:seri-1', 20)
-  assert.deepEqual(first.items.map(i => [i.id, i.pinned ?? false, i.user.isOwner]), [[5, true, true], [9, false, false], [7, false, false]])
-  assert.deepEqual(calls.find(c => c.sql.includes('NOT (c.id'))!.p.at(-1), [5])
-  const next = await svc.list('s:lumos:seri-1', 20, 7)
-  assert.deepEqual(next.items.map(i => i.id), [9, 7]) // tanpa sematan di halaman lanjutan
-})

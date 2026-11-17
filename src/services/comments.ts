@@ -18,8 +18,6 @@ export interface CommentItem {
   myVote: number
   /** jumlah balasan (hanya relevan untuk komentar teratas) */
   replyCount: number
-  /** true = komentar owner yang disematkan di atas ("top komentar"); hanya muncul di halaman pertama */
-  pinned?: boolean
   user: { id: number; username: string; displayName: string; avatarV: number; level: number; verified: boolean; isOwner: boolean }
 }
 
@@ -55,9 +53,6 @@ export interface MyCommentItem extends CommentItem {
   target: string
 }
 
-/** Banyak komentar owner (teratas, terbaru dulu) yang disematkan di puncak daftar. */
-export const MAX_PINNED = 3
-
 const clampLimit = (limit: number) => Math.min(Math.max(Math.floor(limit) || 20, 1), 50)
 
 export interface VoteResult {
@@ -81,30 +76,15 @@ export class CommentService {
     return toItem(r, this.ownerEmails)
   }
 
-  /**
-   * Komentar teratas. `total` = semua komentar + balasan (untuk judul); `hasMore` = masih ada halaman berikutnya.
-   * Komentar owner (maks. [MAX_PINNED] terbaru) selalu disematkan paling atas di halaman pertama (`pinned: true`)
-   * dan tidak diulang di halaman berikutnya.
-   */
+  /** Komentar teratas. `total` = semua komentar + balasan (untuk judul); `hasMore` = masih ada halaman berikutnya. */
   async list(target: unknown, limit = 20, before?: number, viewer: number | null = null): Promise<{ total: number; hasMore: boolean; items: CommentItem[] }> {
     const t = checkTarget(target)
     const n = clampLimit(limit)
-    let pinnedRows: any[] = []
-    if (this.ownerEmails.length) {
-      pinnedRows = (await this.pool.query(
-        `${select('$3')} WHERE c.target = $1 AND c.parent_id IS NULL AND lower(u.email) = ANY($2::text[]) ORDER BY c.id DESC LIMIT ${MAX_PINNED}`,
-        [t, this.ownerEmails, viewer]
-      )).rows
-    }
-    const pinIds = pinnedRows.map(r => Number(r.id))
     const [items, total] = await Promise.all([
-      pinIds.length
-        ? this.pool.query(`${select('$4')} WHERE c.target = $1 AND c.parent_id IS NULL AND ($2::bigint IS NULL OR c.id < $2) AND NOT (c.id = ANY($5::bigint[])) ORDER BY c.id DESC LIMIT $3`, [t, before ?? null, n + 1, viewer, pinIds])
-        : this.pool.query(`${select('$4')} WHERE c.target = $1 AND c.parent_id IS NULL AND ($2::bigint IS NULL OR c.id < $2) ORDER BY c.id DESC LIMIT $3`, [t, before ?? null, n + 1, viewer]),
+      this.pool.query(`${select('$4')} WHERE c.target = $1 AND c.parent_id IS NULL AND ($2::bigint IS NULL OR c.id < $2) ORDER BY c.id DESC LIMIT $3`, [t, before ?? null, n + 1, viewer]),
       this.pool.query('SELECT count(*)::int AS n FROM comments WHERE target = $1', [t])
     ])
-    const pinned = before == null ? pinnedRows.map(r => ({ ...this.item(r), pinned: true })) : []
-    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: [...pinned, ...items.rows.slice(0, n).map(r => this.item(r))] }
+    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(r => this.item(r)) }
   }
 
   /** Balasan sebuah komentar teratas, lama → baru; lanjut dengan `after` = id balasan terakhir yang sudah dimuat. */
