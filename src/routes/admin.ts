@@ -3,14 +3,21 @@ import type { AuthService } from '../services/auth.js'
 import type { PgStore } from '../db/store.js'
 import type { AnnouncementRepo } from '../services/announcements.js'
 import { NotFoundError, ValidationError } from '../core/errors.js'
+import { tokenMatches } from './announcements.js'
 
 /** Panel admin: hanya akun owner (email di OWNER_EMAILS). Kontrol penuh data komik & user. */
 export const adminRoutes: FastifyPluginAsync<{
   auth: AuthService
   store: PgStore
   announcements: AnnouncementRepo
-}> = async (app, { auth, store, announcements }) => {
+  adminToken?: string
+}> = async (app, { auth, store, announcements, adminToken = '' }) => {
   const guard = async (req: { headers: { authorization?: string } }) => {
+    await auth.requireOwner(req.headers.authorization)
+  }
+  // Pengumuman: owner (JWT) atau, bila ADMIN_TOKEN diisi, header x-admin-token (kompatibel dengan curl lama).
+  const annGuard = async (req: { headers: { authorization?: string; 'x-admin-token'?: unknown } }) => {
+    if (adminToken && tokenMatches(req.headers['x-admin-token'], adminToken)) return
     await auth.requireOwner(req.headers.authorization)
   }
   const strict = { rateLimit: { max: 60, timeWindow: '1 minute' } }
@@ -235,14 +242,14 @@ export const adminRoutes: FastifyPluginAsync<{
   // ---- announcements (owner JWT, selain ADMIN_TOKEN) ----
   app.get(
     '/admin/announcements',
-    { onRequest: guard, config: strict, schema: { hide: true } },
+    { onRequest: annGuard, config: strict, schema: { hide: true } },
     async () => ({ data: await announcements.active(50) })
   )
 
   app.post<{ Body: { title: string; body?: string; url?: string; expiresAt?: string } }>(
     '/admin/announcements',
     {
-      onRequest: guard,
+      onRequest: annGuard,
       config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
       schema: {
         hide: true,
@@ -270,7 +277,7 @@ export const adminRoutes: FastifyPluginAsync<{
   app.delete<{ Params: { id: number } }>(
     '/admin/announcements/:id',
     {
-      onRequest: guard,
+      onRequest: annGuard,
       config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
       schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } }
     },

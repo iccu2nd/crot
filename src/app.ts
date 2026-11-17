@@ -155,8 +155,8 @@ export async function createApp(cfg: Config) {
       await v1.register(commentRoutes, { auth, comments })
       await v1.register(xpRoutes, { auth, xp })
       await v1.register(readingRoutes, { auth, reading })
-      await v1.register(announcementRoutes, { repo: new AnnouncementRepo(pool), adminToken: cfg.adminToken })
-      await v1.register(adminRoutes, { auth, store, announcements: new AnnouncementRepo(pool) })
+      await v1.register(announcementRoutes, { repo: new AnnouncementRepo(pool) })
+      await v1.register(adminRoutes, { auth, store, announcements: new AnnouncementRepo(pool), adminToken: cfg.adminToken })
     },
     { prefix: '/v1' }
   )
