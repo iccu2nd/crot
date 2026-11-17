@@ -29,28 +29,31 @@ export const config = {
   autoMigrate: !serverless,
   providers: [...PROVIDER_KEYS].sort((a, b) => ['shinigami', 'manta', 'lumos'].indexOf(a) - ['shinigami', 'manta', 'lumos'].indexOf(b)),
   rateLimitMax: 120,
-  aggregateTimeoutMs: 8000,
+  /** Batas total menunggu satu provider saat fan-out. Lebih ketat = respons lebih cepat saat upstream lambat. */
+  aggregateTimeoutMs: 5000,
   /** Daftar (latest/search): setelah provider PERTAMA menjawab dengan data, provider lain yang lambat hanya ditunggu sebatas ini (ms). 0 = tunggu semua. */
-  listGraceMs: 2500,
+  listGraceMs: 900,
   /** Saat satu chapter dibuka, chapter berikutnya diambil lebih dulu di background (baca lanjut = instan). */
   prefetchNextChapter: true,
-  primaryTimeoutMs: 12000,
+  primaryTimeoutMs: 10000,
   warmer: {
     enabled: true,
-    intervalMs: 90_000,
-    enrich: 15,
-    maintainEvery: 6,
+    /** Lebih sering menghangatkan list Home/Explore supaya cache selalu fresh saat app dibuka. */
+    intervalMs: 60_000,
+    enrich: 20,
+    maintainEvery: 4,
     /** Crawler katalog: genre hanya dibaca dari DB, jadi DB diisi dalam-dalam (banyak halaman tiap sumber) supaya filter genre berisi banyak seri. */
-    crawl: { pages: 15, size: 50, firstDelayMs: 30_000, everyMs: hour(6), enrich: 40, seeds: ['action', 'adventure', 'comedy', 'drama', 'fantasy', 'horror', 'isekai', 'martial arts', 'mystery', 'romance', 'school life', 'sci-fi', 'slice of life', 'supernatural'] }
+    crawl: { pages: 15, size: 50, firstDelayMs: 20_000, everyMs: hour(6), enrich: 40, seeds: ['action', 'adventure', 'comedy', 'drama', 'fantasy', 'horror', 'isekai', 'martial arts', 'mystery', 'romance', 'school life', 'sci-fi', 'slice of life', 'supernatural'] }
   },
   /** fresh = dilayani langsung, stale = dilayani + refresh background / saat upstream gagal */
   ttl: {
     search: { fresh: min(5), stale: hour(1) },
-    latest: { fresh: min(2), stale: hour(1) },
-    detail: { fresh: min(15), stale: hour(24) },
-    chapter: { fresh: min(10), stale: hour(1) },
-    db: { fresh: min(1), stale: min(10) },
-    genres: { fresh: min(10), stale: hour(1) }
+    /** List home sering dibuka: fresh sedikit lebih lama supaya hit cache, stale tetap 1 jam. */
+    latest: { fresh: min(3), stale: hour(1) },
+    detail: { fresh: min(20), stale: hour(24) },
+    chapter: { fresh: min(15), stale: hour(2) },
+    db: { fresh: min(2), stale: min(15) },
+    genres: { fresh: min(15), stale: hour(2) }
   }
 }
 export type Config = typeof config

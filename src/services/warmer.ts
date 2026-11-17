@@ -106,6 +106,7 @@ export class Warmer {
   private async warmLists() {
     const jobs: Array<[string, () => Promise<unknown>]> = [
       ['latest', () => this.svc.latest({ page: 1, limit: 12 })],
+      ['latest-p2', () => this.svc.latest({ page: 2, limit: 12 })],
       ['popular', () => this.svc.popular({ page: 1, limit: 12, days: 7 })],
       ['popular-spotlight', () => this.svc.popular({ page: 1, limit: 6, days: 7 })],
       ['genres', () => this.svc.genres()]
@@ -113,10 +114,10 @@ export class Warmer {
     const results = await Promise.all(jobs.map(([name, fn]) => fn().catch(e => (this.log.warn({ name, err: (e as Error).message }, 'warm list failed'), null))))
     // Detail seri teratas ikut dipanaskan (refreshDetail tidak menghitung hit) -> app yang prefetch detail dilayani dari cache.
     const ids = new Set<string>()
-    for (const r of results.slice(0, 3) as Array<{ data?: Array<{ id: string }> } | null>) r?.data?.slice(0, 6).forEach(s => ids.add(s.id))
+    for (const r of results.slice(0, 4) as Array<{ data?: Array<{ id: string }> } | null>) r?.data?.slice(0, 8).forEach(s => ids.add(s.id))
     const queue = [...ids]
     await Promise.all(
-      Array.from({ length: 3 }, async () => {
+      Array.from({ length: 4 }, async () => {
         for (let id = queue.shift(); id && !this.stopped; id = queue.shift()) {
           try {
             const { provider, ref } = parseId(id)
@@ -129,9 +130,9 @@ export class Warmer {
     )
   }
 
-  /** Genre dasar halaman 1 (query yang sama dengan pill Home) — hanya saat pemeliharaan agar upstream tidak terbebani. */
+  /** Genre dasar halaman 1 (query yang sama dengan pill Home) — dijalankan tiap putaran agar pill Home selalu cache-hit. */
   private async warmGenres() {
-    for (const slug of ['action', 'romance', 'fantasy', 'comedy', 'drama', 'isekai']) {
+    for (const slug of ['action', 'romance', 'fantasy', 'comedy', 'drama', 'isekai', 'adventure', 'horror']) {
       if (this.stopped) return
       await this.svc.byGenre(slug, { page: 1, limit: 12 }).catch(() => undefined)
     }
@@ -140,9 +141,10 @@ export class Warmer {
   async run() {
     this.runs++
     await this.warmLists()
+    // Genre pill Home: tiap 2 putaran supaya cache tetap panas tanpa membanjiri upstream.
+    if ((this.runs - 1) % 2 === 0) await this.warmGenres()
     // Pemeliharaan (enrich detail + prune) cukup tiap beberapa putaran.
     if ((this.runs - 1) % (this.cfg.maintainEvery ?? 1) !== 0) return
-    await this.warmGenres()
     for (const provider of this.providers) {
       await this.svc.latest({ page: 1, limit: 20, provider }).catch(e => this.log.warn({ provider, err: (e as Error).message }, 'warm latest failed'))
     }
