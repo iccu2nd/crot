@@ -1,6 +1,16 @@
 import type { FastifyPluginAsync } from 'fastify'
-import type { AuthService } from '../services/auth.js'
+import { AppError } from '../core/errors.js'
+import type { AuthService, AuthUser } from '../services/auth.js'
 import type { CommentService } from '../services/comments.js'
+
+/** 403 MUTED bila akun sedang dibisukan owner. */
+export function assertNotMuted(user: Pick<AuthUser, 'mutedUntil' | 'muteReason'>, now = Date.now()) {
+  if (!user.mutedUntil || user.mutedUntil <= now) return
+  const until = user.mutedUntil > Date.UTC(3000, 0, 1)
+    ? 'tanpa batas waktu'
+    : `sampai ${new Date(user.mutedUntil).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', dateStyle: 'medium', timeStyle: 'short' })} WIB`
+  throw new AppError(403, 'MUTED', `Kamu dibisukan ${until} dan tidak bisa berkomentar${user.muteReason ? ` (${user.muteReason})` : ''}`)
+}
 
 const limit = (max: number) => ({ rateLimit: { max, timeWindow: '1 minute' } })
 
@@ -109,6 +119,7 @@ export const commentRoutes: FastifyPluginAsync<{ auth: AuthService; comments: Co
     },
     async (req, reply) => {
       const user = await auth.me(req.headers.authorization)
+      assertNotMuted(user)
       const b = req.body as { target: string; body: string; parentId?: number | null }
       const item = await comments.add(user.id, b.target, b.body, b.parentId)
       void reply.header('cache-control', 'no-store')

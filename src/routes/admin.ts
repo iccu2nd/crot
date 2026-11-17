@@ -11,7 +11,8 @@ export const adminRoutes: FastifyPluginAsync<{
   store: PgStore
   announcements: AnnouncementRepo
   adminToken?: string
-}> = async (app, { auth, store, announcements, adminToken = '' }) => {
+  ownerEmails?: string[]
+}> = async (app, { auth, store, announcements, adminToken = '', ownerEmails = [] }) => {
   const guard = async (req: { headers: { authorization?: string } }) => {
     await auth.requireOwner(req.headers.authorization)
   }
@@ -187,7 +188,7 @@ export const adminRoutes: FastifyPluginAsync<{
   )
 
   // ---- users ----
-  app.get<{ Querystring: { q?: string; page?: number; limit?: number } }>(
+  app.get<{ Querystring: { q?: string; filter?: string; page?: number; limit?: number } }>(
     '/admin/users',
     {
       onRequest: guard,
@@ -198,6 +199,7 @@ export const adminRoutes: FastifyPluginAsync<{
           type: 'object',
           properties: {
             q: { type: 'string', maxLength: 200 },
+            filter: { type: 'string', enum: ['', 'banned', 'muted', 'verified', 'avatar'] },
             page: { type: 'integer', minimum: 1, default: 1 },
             limit: { type: 'integer', minimum: 1, maximum: 100, default: 30 }
           }
@@ -209,14 +211,30 @@ export const adminRoutes: FastifyPluginAsync<{
       const limit = req.query.limit ?? 30
       const data = await store.adminListUsers({
         q: req.query.q?.trim() || undefined,
+        filter: req.query.filter || undefined,
         limit,
-        offset: (page - 1) * limit
+        offset: (page - 1) * limit,
+        ownerEmails
       })
       return { data: { ...data, page, limit, hasMore: data.total > page * limit } }
     }
   )
 
-  app.patch<{ Params: { id: number }; Body: { verified: boolean } }>(
+  app.get<{ Params: { id: number } }>(
+    '/admin/users/:id',
+    { onRequest: guard, config: strict, schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } } },
+    async req => {
+      const row = await store.adminGetUser(req.params.id, ownerEmails)
+      if (!row) throw new NotFoundError('User tidak ditemukan')
+      return { data: row }
+    }
+  )
+
+  /** Moderasi: centang verified, blokir/buka blokir, bisukan/buka bisu, reset nama/bio. Balasan = user terbaru. */
+  app.patch<{
+    Params: { id: number }
+    Body: { verified?: boolean; banned?: boolean; banReason?: string; muted?: boolean; muteDays?: number; muteReason?: string; clearBio?: boolean; clearName?: boolean }
+  }>(
     '/admin/users/:id',
     {
       onRequest: guard,
@@ -226,16 +244,69 @@ export const adminRoutes: FastifyPluginAsync<{
         params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] },
         body: {
           type: 'object',
-          required: ['verified'],
           additionalProperties: false,
-          properties: { verified: { type: 'boolean' } }
+          minProperties: 1,
+          properties: {
+            verified: { type: 'boolean' },
+            banned: { type: 'boolean' },
+            banReason: { type: 'string', maxLength: 200 },
+            muted: { type: 'boolean' },
+            muteDays: { type: 'integer', minimum: 1, maximum: 3650 },
+            muteReason: { type: 'string', maxLength: 200 },
+            clearBio: { type: 'boolean' },
+            clearName: { type: 'boolean' }
+          }
         }
       }
     },
     async req => {
-      const row = await store.adminSetUserVerified(req.params.id, req.body.verified)
+      try {
+        const row = await store.adminModerateUser(req.params.id, req.body, ownerEmails)
+        if (!row) throw new NotFoundError('User tidak ditemukan')
+        return { data: row }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('status:')) throw new ValidationError(e.message.slice(7).trim())
+        throw e
+      }
+    }
+  )
+
+  app.delete<{ Params: { id: number } }>(
+    '/admin/users/:id/avatar',
+    { onRequest: guard, config: strict, schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } } },
+    async req => {
+      const row = await store.adminClearUserAvatar(req.params.id, ownerEmails)
       if (!row) throw new NotFoundError('User tidak ditemukan')
       return { data: row }
+    }
+  )
+
+  app.delete<{ Params: { id: number } }>(
+    '/admin/users/:id/comments',
+    { onRequest: guard, config: { rateLimit: { max: 20, timeWindow: '1 minute' } }, schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } } },
+    async req => {
+      if (!(await store.adminGetUser(req.params.id, ownerEmails))) throw new NotFoundError('User tidak ditemukan')
+      return { data: { deleted: await store.adminDeleteUserComments(req.params.id) } }
+    }
+  )
+
+  app.delete<{ Params: { id: number } }>(
+    '/admin/users/:id',
+    { onRequest: guard, config: { rateLimit: { max: 10, timeWindow: '1 minute' } }, schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } } },
+    async req => {
+      const r = await store.adminDeleteUser(req.params.id, ownerEmails)
+      if (r === null) throw new NotFoundError('User tidak ditemukan')
+      if (r === false) throw new ValidationError('Akun owner tidak bisa dihapus')
+      return { data: { deleted: true } }
+    }
+  )
+
+  app.delete<{ Params: { id: number } }>(
+    '/admin/comments/:id',
+    { onRequest: guard, config: strict, schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } } },
+    async req => {
+      if (!(await store.adminDeleteComment(req.params.id))) throw new NotFoundError('Komentar tidak ditemukan')
+      return { data: { deleted: true } }
     }
   )
 

@@ -160,10 +160,24 @@ test('profil publik: tanpa email/hash, memuat level & jumlah komentar; tak ada =
   const svc = new AuthService(f.pool as any, cfg, log)
   const a = await svc.register('budi', 'budi@mail.com', 'password1')
   const pub = await svc.publicProfile(a.user.id)
-  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'bio', 'commentCount', 'displayName', 'id', 'joinedAt', 'level', 'username', 'verified', 'xp'])
+  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'bio', 'commentCount', 'displayName', 'id', 'isOwner', 'joinedAt', 'level', 'username', 'verified', 'xp'])
   assert.equal(pub.username, 'budi')
   assert.equal(pub.level, 1)
   assert.equal(pub.commentCount, 3)
   assert.equal(pub.joinedAt, 1_700_000_000_000)
   await assert.rejects(svc.publicProfile(999), /tidak ditemukan/)
+})
+
+test('moderasi: akun diblokir ditolak di me() & login, owner kebal; bisu hanya selama berlaku', async () => {
+  const { assertNotMuted } = await import('../src/routes/comments.js')
+  const future = Date.now() + 3_600_000
+  assert.throws(() => assertNotMuted({ mutedUntil: future, muteReason: 'spam' }), /dibisukan.*spam/)
+  assert.doesNotThrow(() => assertNotMuted({ mutedUntil: 0, muteReason: '' }))
+  assert.doesNotThrow(() => assertNotMuted({ mutedUntil: Date.now() - 1, muteReason: '' }))
+
+  const row = (email: string) => ({ id: 5, username: 'nakal', email, xp: 0, bannedAt: new Date(), banReason: 'spam' })
+  const svc = new AuthService({ async query() { return { rows: [row('a@x.id')] } } } as any, { ...cfg, jwtSecret: 'x', ownerEmails: ['owner@x.id'] } as any, log)
+  await assert.rejects(svc.me(`Bearer ${signToken(5, 'x', 60)}`), /diblokir: spam/)
+  const owner = new AuthService({ async query() { return { rows: [row('owner@x.id')] } } } as any, { ...cfg, jwtSecret: 'x', ownerEmails: ['owner@x.id'] } as any, log)
+  assert.equal((await owner.me(`Bearer ${signToken(5, 'x', 60)}`)).isOwner, true)
 })

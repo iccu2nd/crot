@@ -426,10 +426,12 @@ export class PgStore implements Store {
         (SELECT COUNT(*)::int FROM users) AS users,
         (SELECT COUNT(*)::int FROM comments) AS comments,
         (SELECT COUNT(*)::int FROM genres) AS genres,
+        (SELECT COUNT(*)::int FROM users WHERE banned_at IS NOT NULL) AS banned,
+        (SELECT COUNT(*)::int FROM users WHERE muted_until > now()) AS muted,
         (SELECT COUNT(*)::int FROM series_views WHERE day >= CURRENT_DATE - 7) AS views_7d
     `)
     return rows[0] as {
-      series: number; chapters: number; users: number; comments: number; genres: number; views_7d: number
+      series: number; chapters: number; users: number; comments: number; genres: number; banned: number; muted: number; views_7d: number
     }
   }
 
@@ -651,47 +653,121 @@ export class PgStore implements Store {
     return (rowCount ?? 0) > 0
   }
 
-  async adminListUsers(opts: { q?: string; limit: number; offset: number }) {
+  /** Kolom user untuk panel admin (+ status moderasi). */
+  private static readonly ADMIN_USER_COLS = `u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified,
+              u.created_at AS "createdAt", CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
+              u.banned_at AS "bannedAt", u.ban_reason AS "banReason", u.muted_until AS "mutedUntil", u.mute_reason AS "muteReason",
+              (SELECT COUNT(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"`
+
+  private adminUser(r: Row, ownerEmails: string[] = []) {
+    const muted = r.mutedUntil ? new Date(r.mutedUntil).getTime() : 0
+    const email = String(r.email ?? '').toLowerCase()
+    return {
+      id: Number(r.id),
+      username: r.username as string,
+      email: (r.email ?? null) as string | null,
+      displayName: (r.displayName ?? '') as string,
+      bio: (r.bio ?? '') as string,
+      xp: Number(r.xp ?? 0),
+      verified: r.verified === true,
+      avatarV: Number(r.avatarV ?? 0),
+      hasAvatar: r.avatarV != null && Number(r.avatarV) > 0 && r.hasAvatar !== false,
+      commentCount: Number(r.commentCount ?? 0),
+      createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+      isOwner: !!email && ownerEmails.includes(email),
+      banned: !!r.bannedAt,
+      banReason: (r.banReason ?? '') as string,
+      mutedUntil: muted > Date.now() ? muted : 0,
+      muteReason: (r.muteReason ?? '') as string
+    }
+  }
+
+  /** `filter`: banned | muted | verified | avatar (punya foto) — kosong = semua. */
+  async adminListUsers(opts: { q?: string; filter?: string; limit: number; offset: number; ownerEmails?: string[] }) {
     const params: unknown[] = []
-    let where = ''
+    const where: string[] = []
     if (opts.q) {
       params.push(`%${opts.q.toLowerCase()}%`)
-      where = `WHERE lower(u.username) LIKE $1 OR lower(COALESCE(u.email,'')) LIKE $1 OR lower(COALESCE(u.display_name,'')) LIKE $1`
+      where.push(`(lower(u.username) LIKE $${params.length} OR lower(COALESCE(u.email,'')) LIKE $${params.length} OR lower(COALESCE(u.display_name,'')) LIKE $${params.length})`)
     }
+    if (opts.filter === 'banned') where.push('u.banned_at IS NOT NULL')
+    else if (opts.filter === 'muted') where.push('u.muted_until > now()')
+    else if (opts.filter === 'verified') where.push('u.verified = true')
+    else if (opts.filter === 'avatar') where.push('u.avatar IS NOT NULL')
+    const w = where.length ? `WHERE ${where.join(' AND ')}` : ''
     params.push(opts.limit, opts.offset)
     const { rows } = await this.pool.query<Row>(
-      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified,
-              u.created_at AS "createdAt", CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
-              (SELECT COUNT(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"
-       FROM users u ${where}
+      `SELECT ${PgStore.ADMIN_USER_COLS}, (u.avatar IS NOT NULL) AS "hasAvatar"
+       FROM users u ${w}
        ORDER BY u.id DESC
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     )
     const countParams = params.slice(0, -2)
-    const { rows: cnt } = await this.pool.query<Row>(`SELECT COUNT(*)::int AS n FROM users u ${where}`, countParams)
-    return {
-      total: cnt[0]?.n ?? 0,
-      items: rows.map(r => ({
-        id: Number(r.id),
-        username: r.username as string,
-        email: (r.email ?? null) as string | null,
-        displayName: (r.displayName ?? '') as string,
-        bio: (r.bio ?? '') as string,
-        xp: Number(r.xp ?? 0),
-        verified: r.verified === true,
-        avatarV: Number(r.avatarV ?? 0),
-        commentCount: Number(r.commentCount ?? 0),
-        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null
-      }))
-    }
+    const { rows: cnt } = await this.pool.query<Row>(`SELECT COUNT(*)::int AS n FROM users u ${w}`, countParams)
+    return { total: cnt[0]?.n ?? 0, items: rows.map(r => this.adminUser(r, opts.ownerEmails)) }
   }
 
-  async adminSetUserVerified(userId: number, verified: boolean) {
-    const { rows } = await this.pool.query(
-      'UPDATE users SET verified = $2 WHERE id = $1 RETURNING id, username, verified',
-      [userId, verified]
+  async adminGetUser(userId: number, ownerEmails: string[] = []) {
+    const { rows } = await this.pool.query<Row>(
+      `SELECT ${PgStore.ADMIN_USER_COLS}, (u.avatar IS NOT NULL) AS "hasAvatar" FROM users u WHERE u.id = $1`,
+      [userId]
     )
-    return rows[0] ? { id: Number(rows[0].id), username: rows[0].username as string, verified: rows[0].verified === true } : null
+    return rows[0] ? this.adminUser(rows[0], ownerEmails) : null
+  }
+
+  /**
+   * Moderasi satu user. `muteDays` = lama bisu (hari); `muted: true` tanpa `muteDays` = permanen.
+   * Akun owner tidak bisa diblokir/dibisukan. Mengembalikan baris user terbaru, atau null bila tak ada.
+   */
+  async adminModerateUser(
+    userId: number,
+    p: { verified?: boolean; banned?: boolean; banReason?: string | null; muted?: boolean; muteDays?: number | null; muteReason?: string | null; clearBio?: boolean; clearName?: boolean },
+    ownerEmails: string[] = []
+  ) {
+    const cur = await this.adminGetUser(userId, ownerEmails)
+    if (!cur) return null
+    if (cur.isOwner && (p.banned === true || p.muted === true)) throw new Error('status: akun owner tidak bisa diblokir atau dibisukan')
+    const sets: string[] = []
+    const params: unknown[] = [userId]
+    const add = (col: string, v: unknown) => { params.push(v); sets.push(`${col} = $${params.length}`) }
+    if (p.verified !== undefined) add('verified', p.verified)
+    if (p.banned === true) { sets.push('banned_at = now()'); add('ban_reason', (p.banReason ?? '').trim().slice(0, 200) || null) }
+    else if (p.banned === false) sets.push('banned_at = NULL', 'ban_reason = NULL')
+    if (p.muted === true) {
+      if (p.muteDays != null && p.muteDays > 0) { params.push(p.muteDays); sets.push(`muted_until = now() + make_interval(days => $${params.length}::int)`) }
+      else sets.push(`muted_until = '9999-12-31T00:00:00Z'`)
+      add('mute_reason', (p.muteReason ?? '').trim().slice(0, 200) || null)
+    } else if (p.muted === false) sets.push('muted_until = NULL', 'mute_reason = NULL')
+    if (p.clearBio) sets.push('bio = NULL')
+    if (p.clearName) sets.push('display_name = NULL')
+    if (sets.length) await this.pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = $1`, params)
+    return this.adminGetUser(userId, ownerEmails)
+  }
+
+  /** Hapus foto profil user (avatar_v dinaikkan supaya cache app/Coil ikut basi). */
+  async adminClearUserAvatar(userId: number, ownerEmails: string[] = []) {
+    const { rowCount } = await this.pool.query('UPDATE users SET avatar = NULL, avatar_v = avatar_v + 1 WHERE id = $1', [userId])
+    return (rowCount ?? 0) > 0 ? this.adminGetUser(userId, ownerEmails) : null
+  }
+
+  /** Hapus semua komentar & balasan milik user (suara & balasan orang lain pada komentar itu ikut terhapus). */
+  async adminDeleteUserComments(userId: number) {
+    const { rowCount } = await this.pool.query('DELETE FROM comments WHERE user_id = $1', [userId])
+    return rowCount ?? 0
+  }
+
+  async adminDeleteComment(commentId: number) {
+    const { rowCount } = await this.pool.query('DELETE FROM comments WHERE id = $1', [commentId])
+    return (rowCount ?? 0) > 0
+  }
+
+  /** Hapus akun permanen (kecuali owner). null = tidak ada; false = akun owner. */
+  async adminDeleteUser(userId: number, ownerEmails: string[] = []) {
+    const cur = await this.adminGetUser(userId, ownerEmails)
+    if (!cur) return null
+    if (cur.isOwner) return false
+    await this.pool.query('DELETE FROM users WHERE id = $1', [userId])
+    return true
   }
 }

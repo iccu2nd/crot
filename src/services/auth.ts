@@ -25,6 +25,10 @@ export interface AuthUser {
   verified: boolean
   /** true jika email akun ada di OWNER_EMAILS (panel admin) */
   isOwner: boolean
+  /** dibisukan sampai kapan (epoch ms); 0 = tidak dibisukan. Selama dibisukan tidak bisa berkomentar. */
+  mutedUntil: number
+  /** alasan bisu dari owner ('' bila tidak ada) */
+  muteReason: string
 }
 /** Profil yang boleh dilihat siapa saja (tanpa email/data akun). */
 export interface PublicProfile {
@@ -51,9 +55,15 @@ type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: strin
 const BAD_LOGIN = 'Username/email atau password salah'
 /** Username hanya boleh diganti sekali per 7 hari. */
 export const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec"`
+const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
 
-type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null }
+type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }
+/** Waktu bisu (epoch ms) bila masih berlaku, selain itu 0. */
+const mutedUntilMs = (v: Date | string | null | undefined, now = Date.now()): number => {
+  const t = v ? new Date(v).getTime() : 0
+  return t > now ? t : 0
+}
+
 const toUser = (r: Row, ownerEmails: string[] = []): AuthUser => {
   const xp = Number(r.xp ?? 0)
   const lv = levelFor(xp)
@@ -67,6 +77,8 @@ const toUser = (r: Row, ownerEmails: string[] = []): AuthUser => {
   avatarV: Number(r.avatarV ?? 0),
   verified: r.verified === true || isOwner,
   isOwner,
+  mutedUntil: mutedUntilMs(r.mutedUntil),
+  muteReason: r.muteReason ?? '',
   usernameCooldownSec: Number(r.usernameCooldownSec ?? 0),
   xp,
   level: lv.level,
@@ -97,7 +109,15 @@ export class AuthService {
     return this.cfg.googleClientId || null
   }
 
+  /** 403 BANNED bila akun diblokir owner (akun owner sendiri tidak bisa diblokir). */
+  private assertNotBanned(r: Row) {
+    if (r.bannedAt && !this.cfg.ownerEmails.includes((r.email ?? '').toLowerCase())) {
+      throw new AppError(403, 'BANNED', `Akun diblokir${r.banReason ? `: ${r.banReason}` : ''}`)
+    }
+  }
+
   private issue(u: Row): AuthResult {
+    this.assertNotBanned(u)
     return { token: signToken(u.id, this.secret, this.cfg.tokenTtlSec), user: toUser(u, this.cfg.ownerEmails) }
   }
 
@@ -145,6 +165,7 @@ export class AuthService {
     if (!claims) throw new UnauthorizedError('Sesi tidak valid, silakan masuk lagi')
     const { rows } = await this.pool.query('SELECT ' + COLS + ' FROM users WHERE id = $1', [claims.sub])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
+    this.assertNotBanned(rows[0])
     return toUser(rows[0], this.cfg.ownerEmails)
   }
 
