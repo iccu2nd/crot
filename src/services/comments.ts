@@ -18,10 +18,13 @@ export interface CommentItem {
   myVote: number
   /** jumlah balasan (hanya relevan untuk komentar teratas) */
   replyCount: number
-  user: { id: number; username: string; displayName: string; avatarV: number; level: number; verified: boolean }
+  user: { id: number; username: string; displayName: string; avatarV: number; level: number; verified: boolean; isOwner: boolean }
 }
 
-const toItem = (r: any): CommentItem => ({
+const toItem = (r: any, ownerEmails: string[] = []): CommentItem => {
+  const email = String(r.email ?? '').toLowerCase()
+  const isOwner = !!email && ownerEmails.includes(email)
+  return {
   id: Number(r.id),
   body: r.body,
   createdAt: new Date(r.created_at).getTime(),
@@ -31,11 +34,12 @@ const toItem = (r: any): CommentItem => ({
   dislikes: Number(r.dislikes ?? 0),
   myVote: Number(r.my_vote ?? 0),
   replyCount: Number(r.reply_count ?? 0),
-  user: { id: Number(r.uid), username: r.username, displayName: r.display_name ?? '', avatarV: Number(r.avatar_v ?? 0), level: levelFor(Number(r.xp ?? 0)).level, verified: r.verified === true }
-})
+  user: { id: Number(r.uid), username: r.username, displayName: r.display_name ?? '', avatarV: Number(r.avatar_v ?? 0), level: levelFor(Number(r.xp ?? 0)).level, verified: r.verified === true || isOwner, isOwner }
+  }
+}
 
 /** Kolom komentar + penulis + jumlah like/dislike/balasan + suara pemirsa (`viewer` = placeholder id pemirsa, mis. '$4'). */
-const select = (viewer: string) => `SELECT c.id, c.target, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.display_name, u.xp, u.verified,
+const select = (viewer: string) => `SELECT c.id, c.target, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified,
                 CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v,
                 COALESCE(NULLIF(ru.display_name, ''), ru.username) AS reply_to_name,
                 (SELECT count(*)::int FROM comment_votes v WHERE v.comment_id = c.id AND v.value = 1) AS likes,
@@ -64,8 +68,13 @@ export interface VoteResult {
 export class CommentService {
   constructor(
     private readonly pool: Pool,
-    private readonly xp?: XpService
+    private readonly xp?: XpService,
+    private readonly ownerEmails: string[] = []
   ) {}
+
+  private item(r: any): CommentItem {
+    return toItem(r, this.ownerEmails)
+  }
 
   /** Komentar teratas. `total` = semua komentar + balasan (untuk judul); `hasMore` = masih ada halaman berikutnya. */
   async list(target: unknown, limit = 20, before?: number, viewer: number | null = null): Promise<{ total: number; hasMore: boolean; items: CommentItem[] }> {
@@ -75,7 +84,7 @@ export class CommentService {
       this.pool.query(`${select('$4')} WHERE c.target = $1 AND c.parent_id IS NULL AND ($2::bigint IS NULL OR c.id < $2) ORDER BY c.id DESC LIMIT $3`, [t, before ?? null, n + 1, viewer]),
       this.pool.query('SELECT count(*)::int AS n FROM comments WHERE target = $1', [t])
     ])
-    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(toItem) }
+    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(r => this.item(r)) }
   }
 
   /** Balasan sebuah komentar teratas, lama → baru; lanjut dengan `after` = id balasan terakhir yang sudah dimuat. */
@@ -85,7 +94,7 @@ export class CommentService {
       this.pool.query(`${select('$4')} WHERE c.parent_id = $1 AND c.id > $2 ORDER BY c.id ASC LIMIT $3`, [parentId, after, n + 1, viewer]),
       this.pool.query('SELECT count(*)::int AS n FROM comments WHERE parent_id = $1', [parentId])
     ])
-    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(toItem) }
+    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(r => this.item(r)) }
   }
 
   /**
@@ -111,7 +120,7 @@ export class CommentService {
     const { rows } = await this.pool.query('INSERT INTO comments (target, user_id, body, parent_id, reply_to_user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id', [t, userId, text, parentId, replyToUser])
     await this.xp?.award(userId, 'comment', String(rows[0].id)).catch(() => 0)
     const full = await this.pool.query(`${select('$2')} WHERE c.id = $1`, [rows[0].id, userId])
-    return toItem(full.rows[0])
+    return this.item(full.rows[0])
   }
 
   /** Like (1), dislike (-1), atau batalkan (0). Penulis dapat XP kecil saat disukai orang lain. */
@@ -134,7 +143,7 @@ export class CommentService {
       this.pool.query(`${select('$4')} WHERE c.user_id = $1 AND ($2::bigint IS NULL OR c.id < $2) ORDER BY c.id DESC LIMIT $3`, [userId, before ?? null, n + 1, viewer]),
       this.pool.query('SELECT count(*)::int AS n FROM comments WHERE user_id = $1', [userId])
     ])
-    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(r => ({ ...toItem(r), target: String(r.target) })) }
+    return { total: total.rows[0]?.n ?? 0, hasMore: items.rows.length > n, items: items.rows.slice(0, n).map(r => ({ ...this.item(r), target: String(r.target) })) }
   }
 
   /** Hanya penulis yang bisa menghapus komentarnya (balasan & suara ikut terhapus). */

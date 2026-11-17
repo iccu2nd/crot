@@ -415,4 +415,283 @@ export class PgStore implements Store {
   async prune() {
     await this.pool.query(`DELETE FROM series_views WHERE day < CURRENT_DATE - 90`)
   }
+
+  // ---- Admin: kontrol penuh atas data di DB ----
+
+  async adminStats() {
+    const { rows } = await this.pool.query<Row>(`
+      SELECT
+        (SELECT COUNT(*)::int FROM series) AS series,
+        (SELECT COUNT(*)::int FROM chapters) AS chapters,
+        (SELECT COUNT(*)::int FROM users) AS users,
+        (SELECT COUNT(*)::int FROM comments) AS comments,
+        (SELECT COUNT(*)::int FROM genres) AS genres,
+        (SELECT COUNT(*)::int FROM series_views WHERE day >= CURRENT_DATE - 7) AS views_7d
+    `)
+    return rows[0] as {
+      series: number; chapters: number; users: number; comments: number; genres: number; views_7d: number
+    }
+  }
+
+  /** List seri mentah dari DB (tidak dedupe), untuk admin. */
+  async adminListSeries(opts: { q?: string; provider?: string; limit: number; offset: number }) {
+    const params: unknown[] = []
+    const where: string[] = []
+    if (opts.q) {
+      params.push(`%${opts.q.toLowerCase()}%`)
+      where.push(`(lower(s.title) LIKE $${params.length} OR lower(s.norm_title) LIKE $${params.length} OR s.ref LIKE $${params.length})`)
+    }
+    if (opts.provider) {
+      params.push(opts.provider)
+      where.push(`s.provider = $${params.length}`)
+    }
+    const w = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    params.push(opts.limit, opts.offset)
+    const { rows } = await this.pool.query<Row>(
+      `SELECT s.id, s.provider, s.ref, s.title, s.cover, s.url, s.type, s.status, s.synopsis, s.author, s.artist,
+              s.year, s.rating, s.chapter_count, s.latest_chapter, s.detail_fetched_at, s.first_seen_at, s.last_seen_at, s.updated_at,
+              (SELECT COUNT(*)::int FROM chapters c WHERE c.series_id = s.id) AS chapter_n,
+              COALESCE((SELECT array_agg(g.name ORDER BY g.name) FROM series_genres sg JOIN genres g ON g.id = sg.genre_id WHERE sg.series_id = s.id), '{}') AS genres
+       FROM series s ${w}
+       ORDER BY s.updated_at DESC NULLS LAST, s.id DESC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    )
+    const countParams = params.slice(0, -2)
+    const { rows: cnt } = await this.pool.query<Row>(
+      `SELECT COUNT(*)::int AS n FROM series s ${w}`,
+      countParams
+    )
+    return {
+      total: cnt[0]?.n ?? 0,
+      items: rows.map(r => ({
+        id: Number(r.id),
+        provider: r.provider as string,
+        ref: r.ref as string,
+        unifiedId: `${r.provider}:${r.ref}`,
+        title: r.title as string,
+        cover: (r.cover ?? '') as string,
+        url: (r.url ?? '') as string,
+        type: r.type as string | null,
+        status: r.status as string | null,
+        synopsis: (r.synopsis ?? '') as string,
+        author: (r.author ?? '') as string,
+        artist: (r.artist ?? '') as string,
+        year: r.year as number | null,
+        rating: r.rating as number | null,
+        chapterCount: r.chapter_count as number | null,
+        latestChapter: r.latest_chapter as string | null,
+        chapterN: Number(r.chapter_n ?? 0),
+        genres: (r.genres as string[]) ?? [],
+        detailFetchedAt: r.detail_fetched_at ? new Date(r.detail_fetched_at).toISOString() : null,
+        firstSeenAt: r.first_seen_at ? new Date(r.first_seen_at).toISOString() : null,
+        lastSeenAt: r.last_seen_at ? new Date(r.last_seen_at).toISOString() : null,
+        updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : null
+      }))
+    }
+  }
+
+  async adminGetSeries(id: number) {
+    const { rows } = await this.pool.query<Row>(
+      `SELECT s.*, (SELECT COUNT(*)::int FROM chapters c WHERE c.series_id = s.id) AS chapter_n,
+              COALESCE((SELECT array_agg(g.slug ORDER BY g.name) FROM series_genres sg JOIN genres g ON g.id = sg.genre_id WHERE sg.series_id = s.id), '{}') AS genre_slugs,
+              COALESCE((SELECT array_agg(g.name ORDER BY g.name) FROM series_genres sg JOIN genres g ON g.id = sg.genre_id WHERE sg.series_id = s.id), '{}') AS genres
+       FROM series s WHERE s.id = $1`,
+      [id]
+    )
+    const r = rows[0]
+    if (!r) return null
+    const ch = await this.pool.query<Row>(
+      `SELECT id, ref, number, number_text, title, released_at FROM chapters WHERE series_id = $1 ORDER BY number DESC NULLS LAST, id DESC`,
+      [id]
+    )
+    return {
+      id: Number(r.id),
+      provider: r.provider as string,
+      ref: r.ref as string,
+      unifiedId: `${r.provider}:${r.ref}`,
+      title: r.title as string,
+      cover: (r.cover ?? '') as string,
+      url: (r.url ?? '') as string,
+      type: r.type as string | null,
+      status: r.status as string | null,
+      synopsis: (r.synopsis ?? '') as string,
+      author: (r.author ?? '') as string,
+      artist: (r.artist ?? '') as string,
+      year: r.year as number | null,
+      rating: r.rating as number | null,
+      chapterCount: r.chapter_count as number | null,
+      latestChapter: r.latest_chapter as string | null,
+      chapterN: Number(r.chapter_n ?? 0),
+      genres: (r.genres as string[]) ?? [],
+      genreSlugs: (r.genre_slugs as string[]) ?? [],
+      detailFetchedAt: r.detail_fetched_at ? new Date(r.detail_fetched_at).toISOString() : null,
+      firstSeenAt: r.first_seen_at ? new Date(r.first_seen_at).toISOString() : null,
+      lastSeenAt: r.last_seen_at ? new Date(r.last_seen_at).toISOString() : null,
+      updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : null,
+      chapters: ch.rows.map(c => ({
+        id: Number(c.id),
+        ref: c.ref as string,
+        number: c.number as number | null,
+        numberText: c.number_text as string,
+        title: (c.title ?? '') as string,
+        releasedAt: c.released_at ? new Date(c.released_at).toISOString() : null
+      }))
+    }
+  }
+
+  async adminUpdateSeries(
+    id: number,
+    patch: {
+      title?: string
+      cover?: string
+      url?: string
+      type?: string | null
+      status?: string | null
+      synopsis?: string
+      author?: string
+      artist?: string
+      year?: number | null
+      rating?: number | null
+      chapterCount?: number | null
+      latestChapter?: string | null
+      genres?: string[]
+    }
+  ) {
+    const sets: string[] = []
+    const params: unknown[] = []
+    const add = (col: string, v: unknown) => {
+      params.push(v)
+      sets.push(`${col} = $${params.length}`)
+    }
+    if (patch.title !== undefined) {
+      add('title', patch.title)
+      params.push(normTitle(patch.title))
+      sets.push(`norm_title = $${params.length}`)
+    }
+    if (patch.cover !== undefined) add('cover', patch.cover)
+    if (patch.url !== undefined) add('url', patch.url)
+    if (patch.type !== undefined) add('type', patch.type)
+    if (patch.status !== undefined) {
+      if (patch.status !== null && !['ongoing', 'completed', 'hiatus'].includes(patch.status)) {
+        throw new Error('status harus ongoing|completed|hiatus atau null')
+      }
+      add('status', patch.status)
+    }
+    if (patch.synopsis !== undefined) add('synopsis', patch.synopsis)
+    if (patch.author !== undefined) add('author', patch.author)
+    if (patch.artist !== undefined) add('artist', patch.artist)
+    if (patch.year !== undefined) add('year', patch.year)
+    if (patch.rating !== undefined) add('rating', patch.rating)
+    if (patch.chapterCount !== undefined) add('chapter_count', patch.chapterCount)
+    if (patch.latestChapter !== undefined) add('latest_chapter', patch.latestChapter)
+    if (!sets.length && patch.genres === undefined) return this.adminGetSeries(id)
+
+    if (sets.length) {
+      sets.push('updated_at = now()')
+      params.push(id)
+      const { rowCount } = await this.pool.query(
+        `UPDATE series SET ${sets.join(', ')} WHERE id = $${params.length}`,
+        params
+      )
+      if (!rowCount) return null
+    }
+
+    if (patch.genres !== undefined) {
+      const slugs = patch.genres.map(g => slugify(g)).filter(Boolean)
+      const names = patch.genres
+      if (slugs.length) {
+        await this.pool.query(
+          `INSERT INTO genres (slug, name) SELECT * FROM unnest($1::text[], $2::text[]) ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name`,
+          [slugs, names]
+        )
+      }
+      await this.pool.query(`DELETE FROM series_genres WHERE series_id = $1`, [id])
+      if (slugs.length) {
+        await this.pool.query(
+          `INSERT INTO series_genres (series_id, genre_id) SELECT $1, g.id FROM genres g WHERE g.slug = ANY($2::text[]) ON CONFLICT DO NOTHING`,
+          [id, slugs]
+        )
+      }
+    }
+    return this.adminGetSeries(id)
+  }
+
+  async adminDeleteSeries(id: number) {
+    const { rowCount } = await this.pool.query('DELETE FROM series WHERE id = $1', [id])
+    return (rowCount ?? 0) > 0
+  }
+
+  async adminUpdateChapter(chapterId: number, patch: { title?: string; numberText?: string; number?: number | null }) {
+    const sets: string[] = []
+    const params: unknown[] = []
+    if (patch.title !== undefined) {
+      params.push(patch.title)
+      sets.push(`title = $${params.length}`)
+    }
+    if (patch.numberText !== undefined) {
+      params.push(patch.numberText)
+      sets.push(`number_text = $${params.length}`)
+    }
+    if (patch.number !== undefined) {
+      params.push(patch.number)
+      sets.push(`number = $${params.length}`)
+    }
+    if (!sets.length) return false
+    params.push(chapterId)
+    const { rowCount } = await this.pool.query(
+      `UPDATE chapters SET ${sets.join(', ')} WHERE id = $${params.length}`,
+      params
+    )
+    return (rowCount ?? 0) > 0
+  }
+
+  async adminDeleteChapter(chapterId: number) {
+    const { rowCount } = await this.pool.query('DELETE FROM chapters WHERE id = $1', [chapterId])
+    return (rowCount ?? 0) > 0
+  }
+
+  async adminListUsers(opts: { q?: string; limit: number; offset: number }) {
+    const params: unknown[] = []
+    let where = ''
+    if (opts.q) {
+      params.push(`%${opts.q.toLowerCase()}%`)
+      where = `WHERE lower(u.username) LIKE $1 OR lower(COALESCE(u.email,'')) LIKE $1 OR lower(COALESCE(u.display_name,'')) LIKE $1`
+    }
+    params.push(opts.limit, opts.offset)
+    const { rows } = await this.pool.query<Row>(
+      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified,
+              u.created_at AS "createdAt", CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
+              (SELECT COUNT(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"
+       FROM users u ${where}
+       ORDER BY u.id DESC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    )
+    const countParams = params.slice(0, -2)
+    const { rows: cnt } = await this.pool.query<Row>(`SELECT COUNT(*)::int AS n FROM users u ${where}`, countParams)
+    return {
+      total: cnt[0]?.n ?? 0,
+      items: rows.map(r => ({
+        id: Number(r.id),
+        username: r.username as string,
+        email: (r.email ?? null) as string | null,
+        displayName: (r.displayName ?? '') as string,
+        bio: (r.bio ?? '') as string,
+        xp: Number(r.xp ?? 0),
+        verified: r.verified === true,
+        avatarV: Number(r.avatarV ?? 0),
+        commentCount: Number(r.commentCount ?? 0),
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null
+      }))
+    }
+  }
+
+  async adminSetUserVerified(userId: number, verified: boolean) {
+    const { rows } = await this.pool.query(
+      'UPDATE users SET verified = $2 WHERE id = $1 RETURNING id, username, verified',
+      [userId, verified]
+    )
+    return rows[0] ? { id: Number(rows[0].id), username: rows[0].username as string, verified: rows[0].verified === true } : null
+  }
 }

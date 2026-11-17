@@ -1,0 +1,282 @@
+import type { FastifyPluginAsync } from 'fastify'
+import type { AuthService } from '../services/auth.js'
+import type { PgStore } from '../db/store.js'
+import type { AnnouncementRepo } from '../services/announcements.js'
+import { NotFoundError, ValidationError } from '../core/errors.js'
+
+/** Panel admin: hanya akun owner (email di OWNER_EMAILS). Kontrol penuh data komik & user. */
+export const adminRoutes: FastifyPluginAsync<{
+  auth: AuthService
+  store: PgStore
+  announcements: AnnouncementRepo
+}> = async (app, { auth, store, announcements }) => {
+  const guard = async (req: { headers: { authorization?: string } }) => {
+    await auth.requireOwner(req.headers.authorization)
+  }
+  const strict = { rateLimit: { max: 60, timeWindow: '1 minute' } }
+
+  // ---- overview ----
+  app.get('/admin/stats', { onRequest: guard, config: strict, schema: { hide: true } }, async () => {
+    return { data: await store.adminStats() }
+  })
+
+  // ---- series ----
+  app.get<{ Querystring: { q?: string; provider?: string; page?: number; limit?: number } }>(
+    '/admin/series',
+    {
+      onRequest: guard,
+      config: strict,
+      schema: {
+        hide: true,
+        querystring: {
+          type: 'object',
+          properties: {
+            q: { type: 'string', maxLength: 200 },
+            provider: { type: 'string', maxLength: 40 },
+            page: { type: 'integer', minimum: 1, default: 1 },
+            limit: { type: 'integer', minimum: 1, maximum: 100, default: 30 }
+          }
+        }
+      }
+    },
+    async req => {
+      const page = req.query.page ?? 1
+      const limit = req.query.limit ?? 30
+      const data = await store.adminListSeries({
+        q: req.query.q?.trim() || undefined,
+        provider: req.query.provider?.trim() || undefined,
+        limit,
+        offset: (page - 1) * limit
+      })
+      return { data: { ...data, page, limit, hasMore: data.total > page * limit } }
+    }
+  )
+
+  app.get<{ Params: { id: number } }>(
+    '/admin/series/:id',
+    {
+      onRequest: guard,
+      config: strict,
+      schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } }
+    },
+    async req => {
+      const row = await store.adminGetSeries(req.params.id)
+      if (!row) throw new NotFoundError('Seri tidak ditemukan')
+      return { data: row }
+    }
+  )
+
+  app.patch<{
+    Params: { id: number }
+    Body: {
+      title?: string
+      cover?: string
+      url?: string
+      type?: string | null
+      status?: string | null
+      synopsis?: string
+      author?: string
+      artist?: string
+      year?: number | null
+      rating?: number | null
+      chapterCount?: number | null
+      latestChapter?: string | null
+      genres?: string[]
+    }
+  }>(
+    '/admin/series/:id',
+    {
+      onRequest: guard,
+      config: strict,
+      schema: {
+        hide: true,
+        params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] },
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            title: { type: 'string', minLength: 1, maxLength: 500 },
+            cover: { type: 'string', maxLength: 2000 },
+            url: { type: 'string', maxLength: 2000 },
+            type: { type: ['string', 'null'], maxLength: 40 },
+            status: { type: ['string', 'null'], enum: ['ongoing', 'completed', 'hiatus', null] },
+            synopsis: { type: 'string', maxLength: 20000 },
+            author: { type: 'string', maxLength: 300 },
+            artist: { type: 'string', maxLength: 300 },
+            year: { type: ['integer', 'null'] },
+            rating: { type: ['number', 'null'] },
+            chapterCount: { type: ['integer', 'null'] },
+            latestChapter: { type: ['string', 'null'], maxLength: 100 },
+            genres: { type: 'array', items: { type: 'string', maxLength: 80 }, maxItems: 30 }
+          }
+        }
+      }
+    },
+    async req => {
+      try {
+        const row = await store.adminUpdateSeries(req.params.id, req.body ?? {})
+        if (!row) throw new NotFoundError('Seri tidak ditemukan')
+        return { data: row }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('status harus')) throw new ValidationError(e.message)
+        throw e
+      }
+    }
+  )
+
+  app.delete<{ Params: { id: number } }>(
+    '/admin/series/:id',
+    {
+      onRequest: guard,
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+      schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } }
+    },
+    async req => {
+      if (!(await store.adminDeleteSeries(req.params.id))) throw new NotFoundError('Seri tidak ditemukan')
+      return { data: { deleted: true } }
+    }
+  )
+
+  // ---- chapters ----
+  app.patch<{
+    Params: { id: number }
+    Body: { title?: string; numberText?: string; number?: number | null }
+  }>(
+    '/admin/chapters/:id',
+    {
+      onRequest: guard,
+      config: strict,
+      schema: {
+        hide: true,
+        params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] },
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            title: { type: 'string', maxLength: 500 },
+            numberText: { type: 'string', maxLength: 40 },
+            number: { type: ['number', 'null'] }
+          }
+        }
+      }
+    },
+    async req => {
+      if (!(await store.adminUpdateChapter(req.params.id, req.body ?? {}))) throw new NotFoundError('Chapter tidak ditemukan')
+      return { data: { updated: true } }
+    }
+  )
+
+  app.delete<{ Params: { id: number } }>(
+    '/admin/chapters/:id',
+    {
+      onRequest: guard,
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+      schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } }
+    },
+    async req => {
+      if (!(await store.adminDeleteChapter(req.params.id))) throw new NotFoundError('Chapter tidak ditemukan')
+      return { data: { deleted: true } }
+    }
+  )
+
+  // ---- users ----
+  app.get<{ Querystring: { q?: string; page?: number; limit?: number } }>(
+    '/admin/users',
+    {
+      onRequest: guard,
+      config: strict,
+      schema: {
+        hide: true,
+        querystring: {
+          type: 'object',
+          properties: {
+            q: { type: 'string', maxLength: 200 },
+            page: { type: 'integer', minimum: 1, default: 1 },
+            limit: { type: 'integer', minimum: 1, maximum: 100, default: 30 }
+          }
+        }
+      }
+    },
+    async req => {
+      const page = req.query.page ?? 1
+      const limit = req.query.limit ?? 30
+      const data = await store.adminListUsers({
+        q: req.query.q?.trim() || undefined,
+        limit,
+        offset: (page - 1) * limit
+      })
+      return { data: { ...data, page, limit, hasMore: data.total > page * limit } }
+    }
+  )
+
+  app.patch<{ Params: { id: number }; Body: { verified: boolean } }>(
+    '/admin/users/:id',
+    {
+      onRequest: guard,
+      config: strict,
+      schema: {
+        hide: true,
+        params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] },
+        body: {
+          type: 'object',
+          required: ['verified'],
+          additionalProperties: false,
+          properties: { verified: { type: 'boolean' } }
+        }
+      }
+    },
+    async req => {
+      const row = await store.adminSetUserVerified(req.params.id, req.body.verified)
+      if (!row) throw new NotFoundError('User tidak ditemukan')
+      return { data: row }
+    }
+  )
+
+  // ---- announcements (owner JWT, selain ADMIN_TOKEN) ----
+  app.get(
+    '/admin/announcements',
+    { onRequest: guard, config: strict, schema: { hide: true } },
+    async () => ({ data: await announcements.active(50) })
+  )
+
+  app.post<{ Body: { title: string; body?: string; url?: string; expiresAt?: string } }>(
+    '/admin/announcements',
+    {
+      onRequest: guard,
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+      schema: {
+        hide: true,
+        body: {
+          type: 'object',
+          required: ['title'],
+          additionalProperties: false,
+          properties: {
+            title: { type: 'string', minLength: 1, maxLength: 120 },
+            body: { type: 'string', maxLength: 500 },
+            url: { type: 'string', maxLength: 500, pattern: '^https?://' },
+            expiresAt: { type: 'string', maxLength: 40 }
+          }
+        }
+      }
+    },
+    async (req, reply) => {
+      const { title, body, url, expiresAt } = req.body
+      if (!title.trim()) throw new ValidationError('title tidak boleh kosong')
+      if (expiresAt !== undefined && Number.isNaN(Date.parse(expiresAt))) throw new ValidationError('expiresAt harus tanggal ISO-8601')
+      return reply.code(201).send({ data: await announcements.create({ title, body, url, expiresAt }) })
+    }
+  )
+
+  app.delete<{ Params: { id: number } }>(
+    '/admin/announcements/:id',
+    {
+      onRequest: guard,
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+      schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } }
+    },
+    async req => {
+      if (!(await announcements.remove(req.params.id))) throw new NotFoundError('Pengumuman tidak ditemukan')
+      return { data: { deleted: true } }
+    }
+  )
+}

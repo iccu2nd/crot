@@ -13,6 +13,7 @@ import { createPool } from './db/pool.js'
 import { PgStore } from './db/store.js'
 import { createProviders } from './providers/index.js'
 import { announcementRoutes } from './routes/announcements.js'
+import { adminRoutes } from './routes/admin.js'
 import { authRoutes } from './routes/auth.js'
 import { commentRoutes } from './routes/comments.js'
 import { xpRoutes } from './routes/xp.js'
@@ -116,7 +117,7 @@ export async function createApp(cfg: Config) {
 
   const auth = new AuthService(pool, cfg.auth, log)
   const xp = new XpService(pool)
-  const comments = new CommentService(pool, xp)
+  const comments = new CommentService(pool, xp, cfg.auth.ownerEmails)
   const reading = new ReadingService(pool)
 
   // ---- error handling ----
@@ -155,6 +156,7 @@ export async function createApp(cfg: Config) {
       await v1.register(xpRoutes, { auth, xp })
       await v1.register(readingRoutes, { auth, reading })
       await v1.register(announcementRoutes, { repo: new AnnouncementRepo(pool), adminToken: cfg.adminToken })
+      await v1.register(adminRoutes, { auth, store, announcements: new AnnouncementRepo(pool) })
     },
     { prefix: '/v1' }
   )

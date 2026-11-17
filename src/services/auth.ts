@@ -23,6 +23,8 @@ export interface AuthUser {
   avatarV: number
   /** centang biru (ditetapkan server, mis. akun owner) */
   verified: boolean
+  /** true jika email akun ada di OWNER_EMAILS (panel admin) */
+  isOwner: boolean
 }
 /** Profil yang boleh dilihat siapa saja (tanpa email/data akun). */
 export interface PublicProfile {
@@ -37,6 +39,8 @@ export interface PublicProfile {
   joinedAt: number
   commentCount: number
   verified: boolean
+  /** true bila email ada di OWNER_EMAILS — role Owner di app */
+  isOwner: boolean
 }
 export interface AuthResult {
   token: string
@@ -47,19 +51,22 @@ type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: strin
 const BAD_LOGIN = 'Username/email atau password salah'
 /** Username hanya boleh diganti sekali per 7 hari. */
 export const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, display_name AS "displayName", bio, xp, verified, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec"`
+const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec"`
 
-type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null }
-const toUser = (r: Row): AuthUser => {
+type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null }
+const toUser = (r: Row, ownerEmails: string[] = []): AuthUser => {
   const xp = Number(r.xp ?? 0)
   const lv = levelFor(xp)
+  const email = (r.email ?? '').toLowerCase()
+  const isOwner = !!email && ownerEmails.includes(email)
   return {
   id: r.id,
   username: r.username,
   displayName: r.displayName ?? '',
   bio: r.bio ?? '',
   avatarV: Number(r.avatarV ?? 0),
-  verified: r.verified === true,
+  verified: r.verified === true || isOwner,
+  isOwner,
   usernameCooldownSec: Number(r.usernameCooldownSec ?? 0),
   xp,
   level: lv.level,
@@ -91,7 +98,7 @@ export class AuthService {
   }
 
   private issue(u: Row): AuthResult {
-    return { token: signToken(u.id, this.secret, this.cfg.tokenTtlSec), user: toUser(u) }
+    return { token: signToken(u.id, this.secret, this.cfg.tokenTtlSec), user: toUser(u, this.cfg.ownerEmails) }
   }
 
   // ------------------------------------------------------------------ password
@@ -138,7 +145,14 @@ export class AuthService {
     if (!claims) throw new UnauthorizedError('Sesi tidak valid, silakan masuk lagi')
     const { rows } = await this.pool.query('SELECT ' + COLS + ' FROM users WHERE id = $1', [claims.sub])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
-    return toUser(rows[0])
+    return toUser(rows[0], this.cfg.ownerEmails)
+  }
+
+  /** Sama seperti me(), tapi 403 jika bukan owner (email di OWNER_EMAILS). */
+  async requireOwner(authorization: string | undefined): Promise<AuthUser> {
+    const u = await this.me(authorization)
+    if (!u.isOwner) throw new AppError(403, 'FORBIDDEN', 'Hanya owner yang boleh mengakses panel admin')
+    return u
   }
 
   // ------------------------------------------------------------------ profil: nama & username
@@ -185,7 +199,7 @@ export class AuthService {
       if (!now) throw new UnauthorizedError('Akun tidak ditemukan')
       if (now.username === username) setUser = false // sama persis: tidak dihitung sebagai penggantian
       else if (Number(now.usernameCooldownSec ?? 0) > 0) throw this.cooldownError(Number(now.usernameCooldownSec))
-      if (!setName && !setUser && !setBio) return toUser(now)
+      if (!setName && !setUser && !setBio) return toUser(now, this.cfg.ownerEmails)
     }
 
     try {
@@ -199,7 +213,7 @@ export class AuthService {
          RETURNING ` + COLS,
         [userId, setName, name, setUser, username, setBio, bio]
       )
-      if (rows[0]) return toUser(rows[0])
+      if (rows[0]) return toUser(rows[0], this.cfg.ownerEmails)
     } catch (e) {
       if ((e as { code?: string }).code === '23505') throw new ConflictError('Username sudah dipakai')
       throw e
@@ -218,7 +232,7 @@ export class AuthService {
 
   async publicProfile(userId: number): Promise<PublicProfile> {
     const { rows } = await this.pool.query(
-      `SELECT u.id, u.username, u.display_name AS "displayName", u.xp, u.verified, u.created_at AS "createdAt",
+      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.created_at AS "createdAt",
               CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
               (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"
          FROM users u WHERE u.id = $1`,
@@ -227,6 +241,8 @@ export class AuthService {
     const r = rows[0]
     if (!r) throw new NotFoundError('Pengguna tidak ditemukan')
     const xp = Number(r.xp ?? 0)
+    const email = String(r.email ?? '').toLowerCase()
+    const isOwner = !!email && this.cfg.ownerEmails.includes(email)
     return {
       id: Number(r.id),
       username: r.username,
@@ -237,7 +253,8 @@ export class AuthService {
       level: levelFor(xp).level,
       joinedAt: new Date(r.createdAt).getTime(),
       commentCount: Number(r.commentCount ?? 0),
-      verified: r.verified === true
+      verified: r.verified === true || isOwner,
+      isOwner
     }
   }
 
@@ -254,13 +271,13 @@ export class AuthService {
   async setAvatar(userId: number, jpeg: Buffer): Promise<AuthUser> {
     const { rows } = await this.pool.query('UPDATE users SET avatar = $2, avatar_v = avatar_v + 1 WHERE id = $1 RETURNING ' + COLS, [userId, jpeg])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
-    return toUser(rows[0])
+    return toUser(rows[0], this.cfg.ownerEmails)
   }
 
   async clearAvatar(userId: number): Promise<AuthUser> {
     const { rows } = await this.pool.query('UPDATE users SET avatar = NULL, avatar_v = avatar_v + 1 WHERE id = $1 RETURNING ' + COLS, [userId])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
-    return toUser(rows[0])
+    return toUser(rows[0], this.cfg.ownerEmails)
   }
 
   async avatarOf(userId: number): Promise<Buffer | null> {
@@ -306,14 +323,14 @@ export class AuthService {
           'INSERT INTO users (username, email, google_sub) VALUES ($1, $2, $3) RETURNING ' + COLS,
           [username, cols.email ?? null, cols.google_sub ?? null]
         )
-        return toUser(rows[0])
+        return toUser(rows[0], this.cfg.ownerEmails)
       } catch (e) {
         const err = e as { code?: string; constraint?: string }
         if (err.code !== '23505') throw e
         if (err.constraint === 'users_username_lower') continue
         // email / google_sub bentrok = balapan dua request: ambil yang sudah ada
         const { rows } = await this.pool.query('SELECT ' + COLS + ' FROM users WHERE google_sub = $1 LIMIT 1', [cols.google_sub ?? null])
-        if (rows[0]) return toUser(rows[0])
+        if (rows[0]) return toUser(rows[0], this.cfg.ownerEmails)
         throw new ConflictError('Email sudah terdaftar dengan akun lain')
       }
     }
