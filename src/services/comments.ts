@@ -34,12 +34,12 @@ const toItem = (r: any, ownerEmails: string[] = []): CommentItem => {
   dislikes: Number(r.dislikes ?? 0),
   myVote: Number(r.my_vote ?? 0),
   replyCount: Number(r.reply_count ?? 0),
-  user: { id: Number(r.uid), username: r.username, displayName: r.display_name ?? '', avatarV: Number(r.avatar_v ?? 0), level: levelFor(Number(r.xp ?? 0)).level, verified: r.verified === true || isOwner, isOwner, premium: r.premium === true }
+  user: { id: Number(r.uid), username: r.username, displayName: r.display_name ?? '', avatarV: Number(r.avatar_v ?? 0), level: levelFor(Number(r.xp ?? 0)).level, verified: (r.verified === true || isOwner) && r.verified_hidden !== true, isOwner, premium: r.premium === true }
   }
 }
 
 /** Kolom komentar + penulis + jumlah like/dislike/balasan + suara pemirsa (`viewer` = placeholder id pemirsa, mis. '$4'). */
-const select = (viewer: string) => `SELECT c.id, c.target, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, u.premium,
+const select = (viewer: string) => `SELECT c.id, c.target, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, u.premium, u.verified_hidden,
                 CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v,
                 COALESCE(NULLIF(ru.display_name, ''), ru.username) AS reply_to_name,
                 (SELECT count(*)::int FROM comment_votes v WHERE v.comment_id = c.id AND v.value = 1) AS likes,
@@ -129,7 +129,7 @@ export class CommentService {
     const { rows: cr } = await this.pool.query('SELECT user_id FROM comments WHERE id = $1', [id])
     if (!cr[0]) throw new NotFoundError('Komentar tidak ditemukan')
     if (value === 0) await this.pool.query('DELETE FROM comment_votes WHERE comment_id = $1 AND user_id = $2', [id, userId])
-    else await this.pool.query('INSERT INTO comment_votes (comment_id, user_id, value) VALUES ($1, $2, $3) ON CONFLICT (comment_id, user_id) DO UPDATE SET value = EXCLUDED.value', [id, userId, value])
+    else await this.pool.query('INSERT INTO comment_votes (comment_id, user_id, value) VALUES ($1, $2, $3) ON CONFLICT (comment_id, user_id) DO UPDATE SET value = EXCLUDED.value, created_at = CASE WHEN comment_votes.value <> EXCLUDED.value THEN now() ELSE comment_votes.created_at END', [id, userId, value])
     const author = Number(cr[0].user_id)
     if (value === 1 && author !== userId) await this.xp?.award(author, 'liked', `${id}:${userId}`).catch(() => 0)
     const { rows } = await this.pool.query('SELECT count(*) FILTER (WHERE value = 1)::int AS likes, count(*) FILTER (WHERE value = -1)::int AS dislikes FROM comment_votes WHERE comment_id = $1', [id])

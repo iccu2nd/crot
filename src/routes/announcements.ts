@@ -19,7 +19,8 @@ const item = {
     id: { type: 'integer' },
     title: { type: 'string' },
     body: { type: 'string' },
-    url: { type: 'string', nullable: true }
+    url: { type: 'string', nullable: true },
+    createdAt: { type: 'integer' }
   }
 } as const
 
@@ -30,10 +31,11 @@ export const announcementRoutes: FastifyPluginAsync<{ repo: AnnouncementRepo }> 
       schema: {
         tags: ['catalog'],
         summary: 'Pengumuman untuk aplikasi',
-        description: 'Pengumuman aktif (maks. 5, terbaru dulu). Aplikasi menyembunyikan bagian ini jika kosong.',
+        description: 'Pengumuman aktif (default 5, maks. 50 lewat `limit`; terbaru dulu). Aplikasi menyembunyikan bagian ini jika kosong.',
+        querystring: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 50, default: 5 } } },
         response: { 200: envelope({ type: 'array', items: item }) }
       }
     },
-    async (_req, reply) => reply.headers(publicCache(60)).send({ data: await repo.active(5) })
+    async (req, reply) => reply.headers(publicCache(60)).send({ data: await repo.active((req.query as { limit?: number }).limit ?? 5) })
   )
 }

@@ -17,11 +17,11 @@ function fakePool(reply: { rows?: Record<string, unknown>[]; rowCount?: number |
 
 describe('AnnouncementRepo', () => {
   it('active: memakai limit, memetakan baris (id numerik, body null -> kosong)', async () => {
-    const { pool, calls } = fakePool({ rows: [{ id: '7', title: 'Halo', body: null, url: null }, { id: 3, title: 'Update', body: 'v1.1', url: 'https://x.id' }] })
+    const { pool, calls } = fakePool({ rows: [{ id: '7', title: 'Halo', body: null, url: null, created_at: '2026-01-01T00:00:00Z' }, { id: 3, title: 'Update', body: 'v1.1', url: 'https://x.id' }] })
     const out = await new AnnouncementRepo(pool).active(2)
     assert.deepEqual(out, [
-      { id: 7, title: 'Halo', body: '', url: null },
-      { id: 3, title: 'Update', body: 'v1.1', url: 'https://x.id' }
+      { id: 7, title: 'Halo', body: '', url: null, createdAt: Date.parse('2026-01-01T00:00:00Z') },
+      { id: 3, title: 'Update', body: 'v1.1', url: 'https://x.id', createdAt: 0 }
     ])
     assert.deepEqual(calls[0].params, [2])
     assert.match(calls[0].sql, /active/)

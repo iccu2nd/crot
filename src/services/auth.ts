@@ -27,6 +27,8 @@ export interface AuthUser {
   isOwner: boolean
   /** Premium Member (ditetapkan owner lewat panel admin) */
   premium: boolean
+  /** pengguna menyembunyikan centang verified-nya dari tampilan publik (`verified` tetap status asli) */
+  verifiedHidden: boolean
   /** dibisukan sampai kapan (epoch ms); 0 = tidak dibisukan. Selama dibisukan tidak bisa berkomentar. */
   mutedUntil: number
   /** alasan bisu dari owner ('' bila tidak ada) */
@@ -59,9 +61,9 @@ type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: strin
 const BAD_LOGIN = 'Username/email atau password salah'
 /** Username hanya boleh diganti sekali per 7 hari. */
 export const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
+const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, verified_hidden AS "verifiedHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
 
-type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }
+type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; verifiedHidden?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }
 /** Waktu bisu (epoch ms) bila masih berlaku, selain itu 0. */
 const mutedUntilMs = (v: Date | string | null | undefined, now = Date.now()): number => {
   const t = v ? new Date(v).getTime() : 0
@@ -82,6 +84,7 @@ const toUser = (r: Row, ownerEmails: string[] = []): AuthUser => {
   verified: r.verified === true || isOwner,
   isOwner,
   premium: r.premium === true,
+  verifiedHidden: r.verifiedHidden === true,
   mutedUntil: mutedUntilMs(r.mutedUntil),
   muteReason: r.muteReason ?? '',
   usernameCooldownSec: Number(r.usernameCooldownSec ?? 0),
@@ -187,7 +190,9 @@ export class AuthService {
    * Ubah nama tampilan dan/atau username. Nama bebas (maks. 30 karakter, kosong = hapus).
    * Username hanya boleh diganti bila sudah lewat 7 hari sejak penggantian terakhir (dicek atomik di SQL).
    */
-  async updateProfile(userId: number, patch: { displayName?: string | null; username?: string | null; bio?: string | null }): Promise<AuthUser> {
+  async updateProfile(userId: number, patch: { displayName?: string | null; username?: string | null; bio?: string | null; verifiedHidden?: boolean }): Promise<AuthUser> {
+    const setHide = typeof patch.verifiedHidden === 'boolean'
+    const hide = patch.verifiedHidden === true
     let setName = false
     let name: string | null = null
     if (patch.displayName != null) {
@@ -217,7 +222,7 @@ export class AuthService {
       if (!USERNAME_RE.test(username)) throw new ValidationError(USERNAME_MSG)
       setUser = true
     }
-    if (!setName && !setUser && !setBio) throw new ValidationError('Tidak ada perubahan')
+    if (!setName && !setUser && !setBio && !setHide) throw new ValidationError('Tidak ada perubahan')
 
     if (setUser) {
       const { rows } = await this.pool.query('SELECT ' + COLS + ' FROM users WHERE id = $1', [userId])
@@ -225,7 +230,7 @@ export class AuthService {
       if (!now) throw new UnauthorizedError('Akun tidak ditemukan')
       if (now.username === username) setUser = false // sama persis: tidak dihitung sebagai penggantian
       else if (Number(now.usernameCooldownSec ?? 0) > 0) throw this.cooldownError(Number(now.usernameCooldownSec))
-      if (!setName && !setUser && !setBio) return toUser(now, this.cfg.ownerEmails)
+      if (!setName && !setUser && !setBio && !setHide) return toUser(now, this.cfg.ownerEmails)
     }
 
     try {
@@ -234,10 +239,11 @@ export class AuthService {
            display_name = CASE WHEN $2::boolean THEN $3::text ELSE display_name END,
            username = CASE WHEN $4::boolean THEN $5::text ELSE username END,
            bio = CASE WHEN $6::boolean THEN $7::text ELSE bio END,
-           username_changed_at = CASE WHEN $4::boolean THEN now() ELSE username_changed_at END
+           username_changed_at = CASE WHEN $4::boolean THEN now() ELSE username_changed_at END,
+           verified_hidden = CASE WHEN $8::boolean THEN $9::boolean ELSE verified_hidden END
          WHERE id = $1 AND (NOT $4::boolean OR username_changed_at IS NULL OR username_changed_at <= now() - interval '${USERNAME_COOLDOWN_DAYS} days')
          RETURNING ` + COLS,
-        [userId, setName, name, setUser, username, setBio, bio]
+        [userId, setName, name, setUser, username, setBio, bio, setHide, hide]
       )
       if (rows[0]) return toUser(rows[0], this.cfg.ownerEmails)
     } catch (e) {
@@ -258,7 +264,7 @@ export class AuthService {
 
   async publicProfile(userId: number): Promise<PublicProfile> {
     const { rows } = await this.pool.query(
-      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.premium, u.created_at AS "createdAt",
+      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.premium, u.verified_hidden, u.created_at AS "createdAt",
               CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
               (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"
          FROM users u WHERE u.id = $1`,
@@ -279,7 +285,7 @@ export class AuthService {
       level: levelFor(xp).level,
       joinedAt: new Date(r.createdAt).getTime(),
       commentCount: Number(r.commentCount ?? 0),
-      verified: r.verified === true || isOwner,
+      verified: (r.verified === true || isOwner) && r.verified_hidden !== true, // disembunyikan pemiliknya = tidak tampil publik
       isOwner,
       premium: r.premium === true
     }
