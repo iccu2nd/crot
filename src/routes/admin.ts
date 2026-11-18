@@ -312,13 +312,17 @@ export const adminRoutes: FastifyPluginAsync<{
   )
 
   // ---- announcements (owner JWT, selain ADMIN_TOKEN) ----
-  app.get(
+  app.get<{ Querystring: { kind?: 'info' | 'popup' | 'all' } }>(
     '/admin/announcements',
-    { onRequest: annGuard, config: strict, schema: { hide: true } },
-    async () => ({ data: await announcements.active(50) })
+    {
+      onRequest: annGuard,
+      config: strict,
+      schema: { hide: true, querystring: { type: 'object', properties: { kind: { type: 'string', enum: ['info', 'popup', 'all'], default: 'all' } } } }
+    },
+    async req => ({ data: await announcements.active(50, req.query.kind ?? 'all') })
   )
 
-  app.post<{ Body: { title: string; body?: string; url?: string; expiresAt?: string } }>(
+  app.post<{ Body: { title: string; body?: string; url?: string; expiresAt?: string; popup?: boolean; imageUrl?: string; version?: string; buttonText?: string; cancelText?: string } }>(
     '/admin/announcements',
     {
       onRequest: annGuard,
@@ -331,18 +335,23 @@ export const adminRoutes: FastifyPluginAsync<{
           additionalProperties: false,
           properties: {
             title: { type: 'string', minLength: 1, maxLength: 120 },
-            body: { type: 'string', maxLength: 500 },
+            body: { type: 'string', maxLength: 1500 },
             url: { type: 'string', maxLength: 500, pattern: '^https?://' },
-            expiresAt: { type: 'string', maxLength: 40 }
+            expiresAt: { type: 'string', maxLength: 40 },
+            popup: { type: 'boolean' },
+            imageUrl: { type: 'string', maxLength: 500, pattern: '^https?://' },
+            version: { type: 'string', maxLength: 20, pattern: '^[0-9A-Za-z.+_-]*$' },
+            buttonText: { type: 'string', maxLength: 24 },
+            cancelText: { type: 'string', maxLength: 24 }
           }
         }
       }
     },
     async (req, reply) => {
-      const { title, body, url, expiresAt } = req.body
+      const { title, expiresAt } = req.body
       if (!title.trim()) throw new ValidationError('title tidak boleh kosong')
       if (expiresAt !== undefined && Number.isNaN(Date.parse(expiresAt))) throw new ValidationError('expiresAt harus tanggal ISO-8601')
-      return reply.code(201).send({ data: await announcements.create({ title, body, url, expiresAt }) })
+      return reply.code(201).send({ data: await announcements.create(req.body) })
     }
   )
 

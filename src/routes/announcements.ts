@@ -21,7 +21,12 @@ const item = {
     body: { type: 'string' },
     url: { type: 'string', nullable: true },
     createdAt: { type: 'integer' },
-    expiresAt: { type: 'integer', nullable: true }
+    expiresAt: { type: 'integer', nullable: true },
+    popup: { type: 'boolean' },
+    imageUrl: { type: 'string', nullable: true },
+    version: { type: 'string', nullable: true },
+    buttonText: { type: 'string', nullable: true },
+    cancelText: { type: 'string', nullable: true }
   }
 } as const
 
@@ -32,11 +37,20 @@ export const announcementRoutes: FastifyPluginAsync<{ repo: AnnouncementRepo }> 
       schema: {
         tags: ['catalog'],
         summary: 'Pengumuman untuk aplikasi',
-        description: 'Pengumuman aktif (default 5, maks. 50 lewat `limit`; terbaru dulu). Aplikasi menyembunyikan bagian ini jika kosong.',
-        querystring: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 50, default: 5 } } },
+        description: 'Pengumuman aktif (default 5, maks. 50 lewat `limit`; terbaru dulu). `kind=info` (default) = tab Informasi, `kind=popup` = popup/info pembaruan. Aplikasi menyembunyikan bagian ini jika kosong. Item popup membawa `version`, `imageUrl`, `buttonText`, `cancelText`.',
+        querystring: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer', minimum: 1, maximum: 50, default: 5 },
+            kind: { type: 'string', enum: ['info', 'popup'], default: 'info' }
+          }
+        },
         response: { 200: envelope({ type: 'array', items: item }) }
       }
     },
-    async (req, reply) => reply.headers(publicCache(60)).send({ data: await repo.active((req.query as { limit?: number }).limit ?? 5) })
+    async (req, reply) => {
+      const q = req.query as { limit?: number; kind?: 'info' | 'popup' }
+      return reply.headers(publicCache(60)).send({ data: await repo.active(q.limit ?? 5, q.kind ?? 'info') })
+    }
   )
 }

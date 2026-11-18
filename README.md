@@ -61,6 +61,11 @@ curl -X POST https://API-KAMU/v1/admin/announcements -H "x-admin-token: $ADMIN_T
 # hapus
 curl -X DELETE https://API-KAMU/v1/admin/announcements/1 -H "x-admin-token: $ADMIN_TOKEN"
 ```
+**Popup / info pembaruan aplikasi** (migration `018`): tambahkan `popup`, `imageUrl`, `version`, `buttonText`, `cancelText` ke body POST. Item popup **tidak** muncul di Notifikasi › Informasi dan tidak ikut hitungan pil merah: ambil lewat `GET /v1/announcements?kind=popup` (default `kind=info`; admin: `/v1/admin/announcements?kind=info|popup|all`). Aplikasi menampilkannya di tengah layar sekali per pengumuman (tombol X, gambar, teks tombol bebas). Bila `version` diisi, popup otomatis tidak tampil lagi setelah aplikasi diperbarui ke versi itu (dibandingkan dengan `VERSION_NAME` aplikasi). Biasanya dibuat dari panel admin aplikasi (tab **Pembaruan**, lengkap dengan pratinjau).
+```bash
+curl -X POST https://API-KAMU/v1/admin/announcements -H "x-admin-token: $ADMIN_TOKEN" -H "content-type: application/json" \
+  -d '{"title":"Versi 2.6.0 tersedia","body":"**Baru**\n- Perbaikan reader\n- Cover lebih cepat","url":"https://github.com/akun/repo/releases","popup":true,"version":"2.6.0","imageUrl":"https://contoh.id/banner.jpg","buttonText":"Unduh","cancelText":"Nanti"}'
+```
 Tanpa `ADMIN_TOKEN` endpoint admin tidak ada; kelola langsung lewat SQL (`INSERT INTO announcements (title, body, url) VALUES (...)`).
 
 ## Kontrak dengan aplikasi
