@@ -98,7 +98,7 @@ describe('shinigami', () => {
 
   it('search/latest/detail (chapter list multi-halaman)/chapter', async () => {
     const m = mockFetch({
-      '/v1/manga/list': () => ({ json: { retcode: 0, data: [manga, { manga_id: '', title: 'x' }] } }),
+      '/v1/manga/list': () => ({ json: { retcode: 0, data: [manga, { manga_id: '', title: 'x' }, { manga_id: 'n1', title: 'Shinigami News' }] } }),
       '/v1/manga/detail/abc': () => ({ json: { retcode: 0, data: { ...manga, description: 'desc', release_year: 2021 } } }),
       'page=1&page_size=100': () => ({ json: { retcode: 0, meta: { total_page: 2 }, data: [{ chapter_id: 'c1', chapter_number: 1, release_date: '2024-02-01T00:00:00Z' }] } }),
       'page=2&page_size=100': () => ({ json: { retcode: 0, data: [{ chapter_id: 'c2', chapter_number: 2 }] } }),
@@ -106,13 +106,17 @@ describe('shinigami', () => {
     })
     try {
       const a = createShinigami()
-      const [s] = await a.search('shini', { page: 1, limit: 10 })
+      const found = await a.search('shini', { page: 1, limit: 10 })
+      const [s] = found
       assert.equal(s.id, 'shinigami:abc')
+      assert.equal(found.length, 1) // 'Shinigami News' & id kosong disaring
       assert.equal(s.type, 'manhwa')
       assert.equal(s.status, 'ongoing')
       assert.equal(s.latestChapter, '12')
+      assert.ok(m.calls[0].startsWith('https://api.shinigami.io/v1/manga/list'))
       assert.ok(m.calls[0].includes('q=shini') && m.calls[0].includes('page_size=10'))
-      assert.equal((await a.latest({ page: 1, limit: 10 })).length, 1)
+      assert.equal((await a.latest({ page: 1, limit: 10, type: 'manhwa' })).length, 1)
+      assert.ok(m.calls[1].includes('is_update=true') && m.calls[1].includes('format=manhwa') && !m.calls[1].includes('q='))
       const d = await a.detail('abc')
       assert.deepEqual(d.chapters.map(c => c.id), ['shinigami:c2', 'shinigami:c1'])
       assert.equal(d.synopsis, 'desc')

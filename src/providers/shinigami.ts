@@ -5,10 +5,14 @@ import type { ChapterContent, ProviderAdapter, SeriesDetail, SeriesStatus, Serie
 import { compact, isoDate, numOrNull } from '../core/util.js'
 
 const KEY = 'shinigami'
-const BASE = 'https://app.shinigami.asia'
-const API = 'https://api.shngm.io'
-const UA = 'Mozilla/5.0 (Android 14; Mobile; rv:153.0) Gecko/153.0 Firefox/153.0'
+// Situs & API pindah ke domain baru (s1.shinigami.mx / api.shinigami.io). Bisa diganti lewat env bila pindah lagi tanpa ubah kode.
+const BASE = (process.env.SHINIGAMI_BASE_URL || 'https://s1.shinigami.mx').replace(/\/+$/, '')
+const API = (process.env.SHINIGAMI_API_URL || 'https://api.shinigami.io').replace(/\/+$/, '')
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
 const HEADERS = { 'user-agent': UA, origin: BASE, referer: `${BASE}/`, accept: 'application/json' }
+// Entri pengumuman milik situs, bukan komik.
+const HIDDEN_TITLES = new Set(['shinigami news'])
+const FORMATS = new Set(['manga', 'manhwa', 'manhua'])
 
 type Raw = Record<string, any>
 
@@ -25,7 +29,7 @@ const names = (list: unknown): string[] =>
 const statusOf = (s: number): SeriesStatus => (({ 1: 'ongoing', 2: 'hiatus' }) as Record<number, SeriesStatus>)[s] || 'completed'
 
 function toSummary(m: Raw): SeriesSummary | null {
-  if (!m?.manga_id || !m.title) return null
+  if (!m?.manga_id || !m.title || HIDDEN_TITLES.has(String(m.title).trim().toLowerCase())) return null
   const id = sid(KEY, m.manga_id)
   return {
     id,
@@ -43,9 +47,12 @@ function toSummary(m: Raw): SeriesSummary | null {
   }
 }
 
-async function list(q: string, page: number, size: number): Promise<SeriesSummary[]> {
-  const qs = new URLSearchParams({ page: String(page), page_size: String(size) })
+async function list(q: string, page: number, size: number, type?: string): Promise<SeriesSummary[]> {
+  const qs = new URLSearchParams({ page: String(page), page_size: String(size), sort: 'latest', sort_order: 'desc' })
   if (q) qs.set('q', q)
+  // Tanpa kata kunci = "terbaru": hanya seri yang baru update, seperti halaman utama situs.
+  else qs.set('is_update', 'true')
+  if (type && FORMATS.has(type.toLowerCase())) qs.set('format', type.toLowerCase())
   const res = await api(`/v1/manga/list?${qs}`)
   return compact((res.data ?? []).map(toSummary))
 }
@@ -77,7 +84,7 @@ export function createShinigami(): ProviderAdapter {
     baseUrl: BASE,
 
     search: (q, { page, limit }) => list(q, page, limit),
-    latest: ({ page, limit }) => list('', page, limit),
+    latest: ({ page, limit, type }) => list('', page, limit, type),
 
     async detail(ref): Promise<SeriesDetail> {
       const [res, chapters] = await Promise.all([api(`/v1/manga/detail/${ref}`), chapterList(ref)])
@@ -101,7 +108,7 @@ export function createShinigami(): ProviderAdapter {
       const d: Raw | undefined = (await api(`/v1/chapter/detail/${ref}`)).data
       if (!d) throw new NotFoundError('Chapter tidak ditemukan')
       const ch: Raw = d.chapter || {}
-      const root = ch.base_url || d.base_url || ''
+      const root = d.base_url || ch.base_url || ''
       const join = (...p: unknown[]) =>
         p
           .map(s => String(s || '').replace(/^\/+|\/+$/g, ''))

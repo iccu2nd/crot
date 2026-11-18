@@ -115,6 +115,9 @@ Adapter Lumos mengikuti scraper terbaru: tanpa cheerio (regex ringan), thumbnail
 katalog `/browse` (genre/sort/type/status) dipakai untuk `genres/:slug/series` — hasilnya langsung disimpan ke PostgreSQL beserta genrenya,
 sehingga genre Lumos ikut lengkap. Sortir & filter akhir dikerjakan SQL agar konsisten lintas provider.
 
+## Shinigami (domain baru)
+Situs `https://s1.shinigami.mx`, API `https://api.shinigami.io/v1`. Keduanya bisa diganti lewat env `SHINIGAMI_BASE_URL` dan `SHINIGAMI_API_URL`. `latest` memakai `is_update=true` (+ `format` bila `type` diisi); entri "Shinigami News" disaring.
+
 ## Catatan jujur
 - Scraper asli tidak punya fungsi *popular* dan *genre*, dan saya tidak mengarang endpoint upstream. Maka:
   **popular** = seri paling banyak dibuka lewat API ini (hit detail) dalam N hari; **genre** = dibangun dari genre seri yang pernah dilihat
