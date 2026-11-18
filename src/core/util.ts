@@ -2,9 +2,14 @@ import { TimeoutError, ValidationError } from './errors.js'
 
 export const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
-/** Judul dinormalisasi untuk mencocokkan seri yang sama antar provider. */
+/** Tag varian di judul yang bukan judul seri: "[Full ver.]", "(Full Version)". Seri bervarian itu = satu komik yang sama. */
+export const VARIANT_TAG = /[\[(（【]\s*full\s*ver(?:sion)?\.?\s*[\])）】]/giu
+export const isVariantTitle = (s: string) => new RegExp(VARIANT_TAG.source, 'iu').test(s)
+
+/** Judul dinormalisasi untuk mencocokkan seri yang sama antar provider (dan varian "[Full ver.]" di provider yang sama). */
 export const normTitle = (s: string) =>
   s
+    .replace(VARIANT_TAG, ' ')
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()

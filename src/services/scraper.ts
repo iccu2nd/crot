@@ -18,7 +18,7 @@ import type {
   SeriesSummary,
   Store
 } from '../core/types.js'
-import { normTitle, slugify, withDeadline } from '../core/util.js'
+import { isVariantTitle, normTitle, slugify, withDeadline } from '../core/util.js'
 
 export interface ViewSink {
   hit(provider: ProviderKey, ref: string): void
@@ -87,6 +87,15 @@ export function mergeSeries(lists: SeriesSummary[][]): SeriesSummary[] {
         const copy = { ...item, genres: [...item.genres], sources: [...item.sources] }
         if (key) byTitle.set(key, copy)
         out.push(copy)
+        continue
+      }
+      // Varian "[Full ver.]" ketemu lebih dulu -> yang berjudul bersih jadi wakil kartu (sumber varian tetap disimpan).
+      if (isVariantTitle(first.title) && !isVariantTitle(item.title)) {
+        const old = { ...first }
+        Object.assign(first, { ...item, genres: [...item.genres], sources: [...item.sources], cover: item.cover || old.cover })
+        first.sources.push(...old.sources.filter(s => !first.sources.some(x => x.id === s.id)))
+        first.genres = [...new Set([...first.genres, ...old.genres])]
+        first.rating ??= old.rating
         continue
       }
       first.sources.push(...item.sources.filter(s => !first.sources.some(x => x.id === s.id)))

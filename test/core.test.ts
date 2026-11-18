@@ -16,6 +16,8 @@ describe('ids & util', () => {
   it('normTitle & slugify', () => {
     assert.equal(normTitle('Solo-Leveling!'), normTitle('solo leveling'))
     assert.equal(normTitle('Café'), 'cafe')
+    assert.equal(normTitle('To Tread into Darkness [Full ver.]'), normTitle('To Tread into Darkness'))
+    assert.equal(normTitle('Solo Leveling (Full Version)'), 'sololeveling')
     assert.equal(slugify('Slice of Life'), 'slice-of-life')
   })
   it('isoDate', () => {

@@ -267,7 +267,7 @@ export class PgStore implements Store {
          SELECT DISTINCT ON (s.norm_title) s.*${q.select ?? ''}
          FROM series s JOIN providers pr ON pr.key = s.provider ${q.join ?? ''}
          ${q.where ?? ''}
-         ORDER BY s.norm_title, pr.priority, s.last_seen_at DESC
+         ORDER BY s.norm_title, pr.priority, (s.title ~* '[\\[(（【]\\s*full\\s*ver') ASC, s.last_seen_at DESC
        ) x ORDER BY ${q.order} LIMIT $${n + 1} OFFSET $${n + 2}`,
       [...q.params, limit, offset]
     )
