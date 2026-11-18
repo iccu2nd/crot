@@ -28,6 +28,10 @@ interface Envelope<T> {
  */
 export class Cache {
   private readonly inflight = new Map<string, Promise<unknown>>()
+  /** L1 di memori proses: jawaban fresh dilayani tanpa round-trip Redis & tanpa JSON.parse ulang. */
+  private readonly l1 = new Map<string, Envelope<unknown>>()
+  private static readonly L1_MAX = 400
+  private static readonly L1_MAX_AGE_MS = 30_000
 
   constructor(
     private readonly kv: KV | null,
@@ -40,8 +44,13 @@ export class Cache {
     load: () => Promise<T>,
     fallback?: () => Promise<T | null>
   ): Promise<{ value: T; state: CacheState }> {
+    const mem = this.l1.get(key) as Envelope<T> | undefined
+    if (mem && Date.now() < mem.f) return { value: mem.v, state: 'hit' }
     const env = await this.read<T>(key)
-    if (env && Date.now() < env.f) return { value: env.v, state: 'hit' }
+    if (env && Date.now() < env.f) {
+      this.remember(key, env)
+      return { value: env.v, state: 'hit' }
+    }
     if (env) {
       void this.refresh(key, ttl, load).catch(() => {})
       return { value: env.v, state: 'stale' }
@@ -77,10 +86,20 @@ export class Cache {
     }
   }
 
+  /** Simpan ke L1; kedaluwarsa L1 dibatasi supaya data tidak menua jauh dari Redis. */
+  private remember<T>(key: string, env: Envelope<T>) {
+    const f = Math.min(env.f, Date.now() + Cache.L1_MAX_AGE_MS)
+    this.l1.delete(key)
+    this.l1.set(key, { v: env.v, f })
+    if (this.l1.size > Cache.L1_MAX) this.l1.delete(this.l1.keys().next().value as string)
+  }
+
   private async write<T>(key: string, v: T, ttl: Ttl): Promise<void> {
+    const env = { v, f: Date.now() + ttl.fresh } satisfies Envelope<T>
+    this.remember(key, env)
     if (!this.kv) return
     try {
-      await this.kv.set(key, JSON.stringify({ v, f: Date.now() + ttl.fresh } satisfies Envelope<T>), 'PX', ttl.fresh + ttl.stale)
+      await this.kv.set(key, JSON.stringify(env), 'PX', ttl.fresh + ttl.stale)
     } catch (e) {
       this.log.warn({ err: (e as Error).message, key }, 'cache write failed')
     }

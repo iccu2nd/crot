@@ -9,7 +9,10 @@ interface Paged {
   provider?: ProviderKey
 }
 
-const publicCache = (seconds: number) => ({ 'cache-control': `public, max-age=${seconds}` })
+/** max-age = cache aplikasi; s-maxage + stale-while-revalidate = cache CDN/edge (Vercel dll.) sehingga request ramai tidak menyentuh fungsi sama sekali. */
+const publicCache = (seconds: number) => ({
+  'cache-control': `public, max-age=${seconds}, s-maxage=${seconds}, stale-while-revalidate=${Math.max(seconds * 10, 600)}`
+})
 
 export const catalogRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async (app, { svc }) => {
   app.get(

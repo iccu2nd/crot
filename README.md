@@ -83,6 +83,17 @@ Tanpa `ADMIN_TOKEN` endpoint admin tidak ada; kelola langsung lewat SQL (`INSERT
 - **View counter** tidak lagi kehilangan hit saat database sempat gagal; hit dikirim ulang pada flush berikutnya.
 - Catatan VPS: Redis di `docker-compose.yml` tanpa persistensi (`--save ""`); berkat fallback PostgreSQL di atas, restart Redis tidak lagi membuat halaman detail lambat.
 
+## Perbaikan kecepatan (v25)
+- **Cache L1 di memori** (`core/cache.ts`): jawaban fresh dilayani tanpa round-trip Redis & tanpa `JSON.parse` ulang. Redis hanya dipakai untuk berbagi antar-instance dan data stale.
+- **Rate limit di memori**, bukan Redis: sebelumnya tiap request menunggu 1 round-trip Redis sebelum diproses.
+- **Genre/Explore tidak lagi menunggu scrape live**: data PostgreSQL dilayani langsung, sinkronisasi katalog Lumos jalan di belakang (hanya ditunggu bila genre itu masih kosong di DB).
+- **`/latest` saat cache kosong** langsung dari PostgreSQL (server biasa) sambil di-refresh di background.
+- **Header CDN**: `s-maxage` + `stale-while-revalidate` pada list/detail/chapter, jadi di Vercel request ramai dilayani dari edge tanpa menyalakan fungsi.
+- **TTL chapter** 6 jam fresh / 7 hari stale (gambar chapter hampir tidak berubah); detail stale 7 hari.
+- **Cold start serverless**: Redis + sync provider paralel; swagger hanya dimuat untuk `/docs` (instance API murni lebih ringan).
+- Migration `015_perf.sql`: index untuk query daftar.
+- Catatan: di Vercel tiap cold start tetap membuat koneksi DB/Redis baru dan warmer tidak jalan. Untuk performa terbaik pakai Railway/VPS (satu proses hidup terus: L1, warmer, dan prefetch chapter aktif). Pastikan region fungsi/DB/Redis sama dan dekat dengan pengguna.
+
 ## Fallback
 - **List (search/latest)**: semua provider dipanggil paralel dengan batas waktu; yang gagal dilewati (`meta.degraded`, `meta.providers`). Jika semuanya gagal → cache stale → data terakhir di PostgreSQL.
 - **Detail/chapter**: jika provider asal gagal, dicari seri yang sama (judul ternormalisasi) di provider lain — dari DB, atau lewat search provider lain; chapter dicocokkan lewat nomor. `meta.fallback=true`, `meta.provider` = sumber sebenarnya.

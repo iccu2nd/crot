@@ -1,8 +1,6 @@
 import { createHash } from 'node:crypto'
 import compress from '@fastify/compress'
 import rateLimit from '@fastify/rate-limit'
-import swagger from '@fastify/swagger'
-import swaggerUi from '@fastify/swagger-ui'
 import Fastify from 'fastify'
 import { Redis } from 'ioredis'
 import type { Config } from './config.js'
@@ -33,7 +31,8 @@ import { ViewCounter } from './services/views.js'
 import { Warmer } from './services/warmer.js'
 
 /** Composition root: merangkai semua dependensi. */
-export async function createApp(cfg: Config) {
+export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
+  const docs = opts.docs ?? true
   const app = Fastify({
     logger: { level: cfg.logLevel },
     trustProxy: cfg.trustProxy,
@@ -65,11 +64,14 @@ export async function createApp(cfg: Config) {
       log.warn({ err: e.message }, 'redis error')
     }
   })
-  await Promise.race([new Promise(r => redis.once('ready', r)), new Promise(r => setTimeout(r, 3_000))])
+  // Koneksi Redis & sinkron provider berjalan paralel (memotong cold start).
+  const adapters = createProviders(cfg.providers)
+  await Promise.all([
+    Promise.race([new Promise(r => redis.once('ready', r)), new Promise(r => setTimeout(r, 3_000))]),
+    store.syncProviders(adapters.map(a => ({ key: a.key, name: a.name, baseUrl: a.baseUrl })))
+  ])
 
   // ---- domain ----
-  const adapters = createProviders(cfg.providers)
-  await store.syncProviders(adapters.map(a => ({ key: a.key, name: a.name, baseUrl: a.baseUrl })))
   const views = new ViewCounter(store, log, 15_000, cfg.serverless)
   const svc = new ScraperService({ adapters, cache: new Cache(redis, log), store, views, log, cfg })
   const warmer = new Warmer(svc, store, cfg.providers, log, cfg.warmer)
@@ -87,35 +89,37 @@ export async function createApp(cfg: Config) {
   })
   await app.register(compress, { threshold: 1024, encodings: ['gzip', 'deflate'] })
 
-  // ---- rate limit (state di Redis; jika Redis down request tetap lolos) ----
+  // ---- rate limit: counter di memori proses (tanpa round-trip Redis di setiap request) ----
   await app.register(rateLimit, {
     max: cfg.rateLimitMax,
     timeWindow: '1 minute',
-    redis,
-    nameSpace: 'rl:',
+    cache: 10_000,
     skipOnError: true,
     allowList: req => req.url.startsWith('/docs') || req.url === '/health'
   })
 
-  // ---- dokumentasi ----
-  await app.register(swagger, {
-    openapi: {
-      info: {
-        title: 'Unified Scraper API',
-        version: '1.0.0',
-        description:
-          'Satu API untuk provider Shinigami, Manta, dan Lumos dengan format data seragam.\n\n' +
-          'Id unified: `<provider>:<id asli>`. Respons sukses: `{ data, meta }`. Error: `{ error: { code, message } }`.'
-      },
-      tags: [
-        { name: 'catalog', description: 'Search, latest, popular, genre, pengumuman' },
-        { name: 'series', description: 'Detail seri & daftar chapter' },
-        { name: 'chapters', description: 'Gambar chapter' },
-        { name: 'system', description: 'Health & status' }
-      ]
-    }
-  })
-  await app.register(swaggerUi, { routePrefix: '/docs' })
+  // ---- dokumentasi (dimuat dinamis: instance API murni tidak menanggung biaya swagger saat start) ----
+  if (docs) {
+    const [{ default: swagger }, { default: swaggerUi }] = await Promise.all([import('@fastify/swagger'), import('@fastify/swagger-ui')])
+    await app.register(swagger, {
+      openapi: {
+        info: {
+          title: 'Unified Scraper API',
+          version: '1.0.0',
+          description:
+            'Satu API untuk provider Shinigami, Manta, dan Lumos dengan format data seragam.\n\n' +
+            'Id unified: `<provider>:<id asli>`. Respons sukses: `{ data, meta }`. Error: `{ error: { code, message } }`.'
+        },
+        tags: [
+          { name: 'catalog', description: 'Search, latest, popular, genre, pengumuman' },
+          { name: 'series', description: 'Detail seri & daftar chapter' },
+          { name: 'chapters', description: 'Gambar chapter' },
+          { name: 'system', description: 'Health & status' }
+        ]
+      }
+    })
+    await app.register(swaggerUi, { routePrefix: '/docs' })
+  }
 
   const auth = new AuthService(pool, cfg.auth, log)
   const xp = new XpService(pool)
@@ -147,7 +151,7 @@ export async function createApp(cfg: Config) {
   })
 
   // ---- routes ----
-  app.get('/', { schema: { hide: true } }, async (_req, reply) => reply.redirect('/docs'))
+  app.get('/', { schema: { hide: true } }, async (_req, reply) => (docs ? reply.redirect('/docs') : reply.send({ name: 'Unified Scraper API' })))
   await app.register(systemRoutes, { store, redis })
   await app.register(
     async v1 => {

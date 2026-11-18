@@ -50,9 +50,10 @@ export const config = {
     search: { fresh: min(5), stale: hour(1) },
     /** List home sering dibuka: fresh sedikit lebih lama supaya hit cache, stale tetap 1 jam. */
     latest: { fresh: min(3), stale: hour(1) },
-    detail: { fresh: min(20), stale: hour(24) },
-    chapter: { fresh: min(15), stale: hour(2) },
-    db: { fresh: min(2), stale: min(15) },
+    detail: { fresh: min(20), stale: hour(24 * 7) },
+    /** Gambar chapter nyaris tidak pernah berubah: fresh lama + stale panjang = hampir selalu cache-hit. */
+    chapter: { fresh: hour(6), stale: hour(24 * 7) },
+    db: { fresh: min(2), stale: hour(1) },
     genres: { fresh: min(15), stale: hour(2) }
   }
 }

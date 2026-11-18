@@ -2,7 +2,9 @@ import type { FastifyPluginAsync } from 'fastify'
 import type { ScraperService } from '../services/scraper.js'
 import { R, idParam } from './schemas.js'
 
-const publicCache = (seconds: number) => ({ 'cache-control': `public, max-age=${seconds}` })
+const publicCache = (seconds: number, edge = seconds) => ({
+  'cache-control': `public, max-age=${seconds}, s-maxage=${edge}, stale-while-revalidate=${Math.max(edge * 10, 600)}`
+})
 
 export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async (app, { svc }) => {
   const seriesId = idParam('Id seri unified, mis. "shinigami:<uuid>", "manta:123", "lumos:<slug>"')
@@ -18,13 +20,13 @@ export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async (
         response: R.detail
       }
     },
-    async (req, reply) => reply.headers(publicCache(300)).send(await svc.detail(req.params.id))
+    async (req, reply) => reply.headers(publicCache(300, 60)).send(await svc.detail(req.params.id))
   )
 
   app.get<{ Params: { id: string } }>(
     '/series/:id/chapters',
     { schema: { tags: ['series'], summary: 'Daftar chapter (terbaru -> terlama)', params: seriesId, response: R.chapters } },
-    async (req, reply) => reply.headers(publicCache(300)).send(await svc.chapters(req.params.id))
+    async (req, reply) => reply.headers(publicCache(300, 60)).send(await svc.chapters(req.params.id))
   )
 
   app.get<{ Params: { id: string } }>(
@@ -40,6 +42,6 @@ export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async (
         response: R.chapter
       }
     },
-    async (req, reply) => reply.headers(publicCache(300)).send(await svc.chapter(req.params.id))
+    async (req, reply) => reply.headers(publicCache(900, 3600)).send(await svc.chapter(req.params.id))
   )
 }

@@ -210,6 +210,15 @@ export class ScraperService {
   // ------------------------------------------------------------------ list (search / latest)
 
   private listFrom(p: ProviderAdapter, kind: 'search' | 'latest', a: { q?: string; page: number; limit: number; type?: string }) {
+    // Cache kosong (Redis restart / TTL habis) -> tampilkan data tersimpan di PostgreSQL seketika, segarkan di belakang.
+    // Tidak untuk serverless (proses dibeku setelah respons, refresh latar tidak bisa diandalkan) dan tidak untuk search.
+    const local =
+      kind === 'latest' && !this.o.cfg.serverless
+        ? async () => {
+            const rows = await this.o.store.latestLocal({ limit: a.limit, offset: (a.page - 1) * a.limit, provider: p.key })
+            return rows.length >= Math.min(a.limit, 6) ? rows : null
+          }
+        : undefined
     const key =
       kind === 'search'
         ? `s:${p.key}:${a.q!.trim().toLowerCase()}:${a.page}:${a.limit}`
@@ -218,7 +227,7 @@ export class ScraperService {
       const items = await this.call(p, () => (kind === 'search' ? p.search(a.q!, a) : p.latest(a)))
       await this.background(this.o.store.saveSummaries(items), 'saveSummaries')
       return items
-    })
+    }, local)
   }
 
   private async fanOut(
@@ -326,20 +335,39 @@ export class ScraperService {
 
   async byGenre(slug: string, o: PageQuery & GenreFilters): Promise<ListResult> {
     const providers: Record<string, ProviderStatus> = {}
-    await Promise.all(
-      this.pick(o.provider)
-        .filter(p => p.browse)
-        .map(async p => {
+    const key = `gs:${slug}:${o.provider ?? ''}:${o.sort ?? 'latest'}:${o.type ?? ''}:${o.status ?? ''}:${o.page}:${o.limit}`
+    const native = this.pick(o.provider).filter(p => p.browse)
+    const sync = async (budgetMs: number) => {
+      await Promise.all(
+        native.map(async p => {
           try {
-            const r = await withDeadline(this.browseFrom(p, slug, o), this.o.cfg.aggregateTimeoutMs)
+            const r = await withDeadline(this.browseFrom(p, slug, o), budgetMs)
             providers[p.key] = r.state === 'stale' ? 'stale' : 'ok'
           } catch (e) {
             providers[p.key] = statusOf(e)
           }
         })
-    )
-    const key = `gs:${slug}:${o.provider ?? ''}:${o.sort ?? 'latest'}:${o.type ?? ''}:${o.status ?? ''}:${o.page}:${o.limit}`
-    const res = await this.dbList(key, o, () => this.o.store.byGenre(slug, { ...dbPage(o), sort: o.sort, type: o.type, status: o.status }))
+      )
+    }
+    const load = () => this.o.store.byGenre(slug, { ...dbPage(o), sort: o.sort, type: o.type, status: o.status })
+    const read = () => this.dbList(key, o, load)
+
+    // Katalog native (Lumos) ditarik live ke DB. Dulu SELALU ditunggu (sampai 5 dtk tiap kombinasi filter baru);
+    // sekarang data tersimpan dilayani langsung dan sinkronisasi jalan di belakang. Hanya bila DB masih kosong untuk
+    // genre ini, sinkronisasi ditunggu. Serverless membekukan proses setelah respons -> tunggu singkat saja.
+    let res = await read()
+    if (!native.length) {
+      /* tidak ada provider native */
+    } else if (res.data.length === 0) {
+      await sync(this.o.cfg.aggregateTimeoutMs)
+      const data = await load() // langsung ke DB: hasil kosong sebelumnya masih tersimpan di cache
+      res = { data, meta: { ...res.meta, count: data.length, source: 'db' } }
+    } else if (this.o.cfg.serverless) {
+      await sync(1500)
+    } else {
+      void sync(this.o.cfg.aggregateTimeoutMs)
+      for (const p of native) providers[p.key] = 'stale'
+    }
     res.meta.providers = providers
     res.meta.degraded = Object.values(providers).some(s => s !== 'ok' && s !== 'stale')
     return res
