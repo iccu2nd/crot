@@ -197,19 +197,44 @@ export function createLumos(): ProviderAdapter {
   }
 
   /** Thumbnail Lumos bisa berupa `?src=<base64url>`; dekode ke URL CDN langsung. */
-  function image(src?: string | null): string {
-    if (!src) return ''
-    if (/^https?:\/\//.test(src)) return src
-    const m = src.match(/[?&]src=([\w\-=]+)/)
+  function image(raw?: string | null): string {
+    if (!raw) return ''
+    // Atribut HTML mentah memuat `&amp;`; tanpa didekode parameter `src=`/`url=` tidak terbaca & URL jadi rusak.
+    const src = decode(String(raw)).trim()
+    if (!src || /^(data|blob|javascript):/i.test(src)) return '' // placeholder lazy-load, bukan cover asli
+    if (src.startsWith('//')) return `https:${src}`
+    if (/^https?:\/\//.test(src) && !/[?&](src|url)=/.test(src)) return src
+    const m = src.match(/[?&;](?:src|url)=([^&#]+)/)
     if (m) {
+      const v = m[1]
       try {
-        let b64 = m[1].replace(/-/g, '+').replace(/_/g, '/')
-        while (b64.length % 4) b64 += '='
-        const url = Buffer.from(b64, 'base64').toString('utf8')
-        if (url.startsWith('http')) return url
+        const dec = decodeURIComponent(v) // ?url=https%3A%2F%2F... (gaya next/image)
+        if (/^https?:\/\//.test(dec)) return dec
       } catch {}
+      if (/^[\w\-=]+$/.test(v)) {
+        try {
+          let b64 = v.replace(/-/g, '+').replace(/_/g, '/')
+          while (b64.length % 4) b64 += '='
+          const url = Buffer.from(b64, 'base64').toString('utf8')
+          if (url.startsWith('http')) return url
+        } catch {}
+      }
     }
+    if (/^https?:\/\//.test(src)) return src
     return site + (src.startsWith('/') ? '' : '/') + src
+  }
+
+  /** Gambar pertama yang asli di sebuah kartu: utamakan data-src/srcset (lazy-load), lewati placeholder `data:`. */
+  function cardImage(block: string): string {
+    for (const tag of block.match(/<img\b[^>]*>/gi) ?? []) {
+      const attr = (n: string) => tag.match(new RegExp(`\\s${n}="([^"]*)"`, 'i'))?.[1]
+      const cand = [attr('data-src'), attr('data-lazy-src'), attr('src'), attr('srcset')?.split(',')[0]?.trim().split(/\s+/)[0]]
+      for (const c of cand) {
+        const u = image(c)
+        if (u) return u
+      }
+    }
+    return ''
   }
 
   function toSummary(i: Raw): SeriesSummary | null {
@@ -275,7 +300,7 @@ export function createLumos(): ProviderAdapter {
         id,
         provider: KEY,
         title: text(b.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i)?.[1]) || slug,
-        cover: image(b.match(/<img[^>]+src="([^"]+)"/i)?.[1]),
+        cover: cardImage(b),
         url: `${site}/comic/${slug}`,
         type: type || null,
         status: statusOf(text(b.match(/<span[^>]*class="[^"]*capitalize[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1])),

@@ -12,7 +12,7 @@ ORDER BY 1, 2
 ON CONFLICT (provider, ref) DO UPDATE SET
   title          = EXCLUDED.title,
   norm_title     = EXCLUDED.norm_title,
-  cover          = COALESCE(NULLIF(EXCLUDED.cover, ''), series.cover),
+  cover          = CASE WHEN EXCLUDED.cover ~ '^https?://' AND EXCLUDED.cover !~ 'data:' THEN EXCLUDED.cover ELSE series.cover END,
   url            = EXCLUDED.url,
   type           = COALESCE(EXCLUDED.type, series.type),
   status         = COALESCE(EXCLUDED.status, series.status),
@@ -30,7 +30,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
 ON CONFLICT (provider, ref) DO UPDATE SET
   title             = EXCLUDED.title,
   norm_title        = EXCLUDED.norm_title,
-  cover             = COALESCE(NULLIF(EXCLUDED.cover, ''), series.cover),
+  cover             = CASE WHEN EXCLUDED.cover ~ '^https?://' AND EXCLUDED.cover !~ 'data:' THEN EXCLUDED.cover ELSE series.cover END,
   url               = EXCLUDED.url,
   type              = COALESCE(EXCLUDED.type, series.type),
   status            = COALESCE(EXCLUDED.status, series.status),
