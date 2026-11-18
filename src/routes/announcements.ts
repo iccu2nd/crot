@@ -20,7 +20,8 @@ const item = {
     title: { type: 'string' },
     body: { type: 'string' },
     url: { type: 'string', nullable: true },
-    createdAt: { type: 'integer' }
+    createdAt: { type: 'integer' },
+    expiresAt: { type: 'integer', nullable: true }
   }
 } as const
 

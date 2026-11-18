@@ -20,8 +20,8 @@ describe('AnnouncementRepo', () => {
     const { pool, calls } = fakePool({ rows: [{ id: '7', title: 'Halo', body: null, url: null, created_at: '2026-01-01T00:00:00Z' }, { id: 3, title: 'Update', body: 'v1.1', url: 'https://x.id' }] })
     const out = await new AnnouncementRepo(pool).active(2)
     assert.deepEqual(out, [
-      { id: 7, title: 'Halo', body: '', url: null, createdAt: Date.parse('2026-01-01T00:00:00Z') },
-      { id: 3, title: 'Update', body: 'v1.1', url: 'https://x.id', createdAt: 0 }
+      { id: 7, title: 'Halo', body: '', url: null, createdAt: Date.parse('2026-01-01T00:00:00Z'), expiresAt: null },
+      { id: 3, title: 'Update', body: 'v1.1', url: 'https://x.id', createdAt: 0, expiresAt: null }
     ])
     assert.deepEqual(calls[0].params, [2])
     assert.match(calls[0].sql, /active/)

@@ -52,7 +52,7 @@ Sukses: `{ data, meta }`. Error: `{ error: { code, message } }`.
 Unduh gambar dengan header dari `imageHeaders` (referer wajib untuk provider tertentu).
 
 ## Pengumuman (untuk aplikasi MiToon)
-Aplikasi menampilkan `GET /v1/announcements` di Home (`{ data: [{ id, title, body, url }] }`; bagian disembunyikan bila kosong).
+Aplikasi menampilkan `GET /v1/announcements` di Notifikasi › tab Informasi (`{ data: [{ id, title, body, url, createdAt, expiresAt }] }`), bukan di Home. `GET /v1/notifications/unread` mengembalikan `{ count, notif, info }`; `POST /v1/notifications/read?kind=notif|info|all`.
 Data ada di tabel `announcements` (migration `002`). Jika `ADMIN_TOKEN` diisi, tersedia endpoint admin (tidak tampil di `/docs`, dibatasi 10 request/menit):
 ```bash
 # tambah (expiresAt opsional, ISO-8601)
@@ -67,7 +67,7 @@ Tanpa `ADMIN_TOKEN` endpoint admin tidak ada; kelola langsung lewat SQL (`INSERT
 | Layar aplikasi | Endpoint |
 |---|---|
 | Home › Sorotan / Populer / genre, carousel | `/latest`, `/popular`, `/genres/:slug/series`, `/popular?limit=6` |
-| Home › pengumuman | `/announcements` |
+| Notifikasi › Informasi | `/announcements` |
 | Explore (genre, urutkan, format, status) | `/genres`, `/genres/:slug/series?sort&type&status`, `/latest?type`, `/popular` |
 | Cari | `/search` |
 | Detail (info + chapter) | `/series/:id` |

@@ -7,6 +7,8 @@ export interface Announcement {
   url: string | null
   /** epoch ms */
   createdAt: number
+  /** epoch ms; null = tidak kedaluwarsa */
+  expiresAt: number | null
 }
 
 export interface NewAnnouncement {
@@ -22,7 +24,8 @@ const toAnnouncement = (r: Record<string, any>): Announcement => ({
   title: String(r.title),
   body: String(r.body ?? ''),
   url: r.url ?? null,
-  createdAt: r.created_at ? new Date(r.created_at).getTime() : 0
+  createdAt: r.created_at ? new Date(r.created_at).getTime() : 0,
+  expiresAt: r.expires_at ? new Date(r.expires_at).getTime() : null
 })
 
 /** Pengumuman untuk aplikasi. Tabel kecil, jadi langsung ke PostgreSQL tanpa cache. */
@@ -32,7 +35,7 @@ export class AnnouncementRepo {
   /** Yang aktif & belum kedaluwarsa, terbaru dulu. */
   async active(limit = 5): Promise<Announcement[]> {
     const { rows } = await this.pool.query(
-      `SELECT id, title, body, url, created_at FROM announcements
+      `SELECT id, title, body, url, created_at, expires_at FROM announcements
        WHERE active AND (expires_at IS NULL OR expires_at > now())
        ORDER BY created_at DESC, id DESC
        LIMIT $1`,
@@ -45,7 +48,7 @@ export class AnnouncementRepo {
     const { rows } = await this.pool.query(
       `INSERT INTO announcements (title, body, url, expires_at)
        VALUES ($1, $2, $3, $4)
-       RETURNING id, title, body, url, created_at`,
+       RETURNING id, title, body, url, created_at, expires_at`,
       [a.title.trim(), (a.body ?? '').trim(), a.url ?? null, a.expiresAt ?? null]
     )
     return toAnnouncement(rows[0])
