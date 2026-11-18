@@ -104,7 +104,7 @@ export class NotificationService {
        + (SELECT count(*) FROM comment_votes v JOIN comments cm ON cm.id = v.comment_id
            WHERE v.created_at > u.notif_seen_at AND v.value = 1 AND v.user_id <> u.id AND cm.user_id = u.id)
        )::int AS notif,
-       (SELECT count(*) FROM announcements a WHERE a.active AND NOT a.popup AND (a.expires_at IS NULL OR a.expires_at > now()) AND a.created_at > u.info_seen_at)::int AS info
+       (SELECT count(*) FROM announcements a WHERE a.active AND (a.expires_at IS NULL OR a.expires_at > now()) AND a.created_at > u.info_seen_at)::int AS info
        FROM users u WHERE u.id = $1`,
       [userId]
     )
