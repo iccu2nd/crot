@@ -9,7 +9,7 @@ import { mockFetch } from './helpers.js'
 const nextData = (pageProps: unknown) => `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps } })}</script></html>`
 
 describe('manta', () => {
-  const seriesRaw = { id: 5, type: 60, episodeCount: 3, data: { title: { en: 'Manta Title' }, tags: [{ name: { en: 'Action' } }], creators: [{ name: 'Kim' }] }, image: { '1280x1840_720': { downloadUrl: 'cover.jpg' } } }
+  const seriesRaw = { id: 5, type: 60, episodeCount: 3, data: { title: { en: 'Manta Title' }, tags: [{ name: { en: 'Action' } }], creators: [{ name: 'Kim' }] }, image: { '1280x1840_720': { downloadUrl: 'https://cdn.test/cover.jpg' } } }
   const episodes = [{ id: 9001, ord: 1, openAt: '2024-01-02T00:00:00Z' }, { id: 9002, ord: 2, openAt: 1704164645000 }, { id: 9003, ord: 3 }]
 
   it('latest & search -> format unified', async () => {
@@ -23,10 +23,23 @@ describe('manta', () => {
       assert.equal(item.id, 'manta:5')
       assert.equal(item.type, 'manga')
       assert.deepEqual(item.genres, ['Action'])
-      assert.equal(item.cover, 'cover.jpg')
+      assert.equal(item.cover, 'https://cdn.test/cover.jpg')
       assert.ok(m.calls[0].includes('homeType=manga'))
       assert.equal((await a.search('x', { page: 1, limit: 10 })).length, 1)
       assert.equal((await a.search('x', { page: 2, limit: 10 })).length, 0)
+    } finally { m.restore() }
+  })
+
+  it('cover tetap terisi: ukuran key lain & item feed tidak menimpa gambar seri', async () => {
+    const odd = { id: 7, type: 60, data: { title: { en: 'Odd' } }, image: { '640x920_480': { downloadUrl: 'https://cdn.test/odd.jpg' } } }
+    const m = mockFetch({
+      '/front/v1/home/': () => ({ json: { data: { seriesMap: { 5: seriesRaw, 7: odd }, items: [{ seriesId: 5, image: { banner: {} } }, { seriesId: 7 }] } } })
+    })
+    try {
+      const a = createManta()
+      const list = await a.latest({ page: 1, limit: 20, type: 'manga' })
+      assert.equal(list[0].cover, 'https://cdn.test/cover.jpg')
+      assert.equal(list[1].cover, 'https://cdn.test/odd.jpg')
     } finally { m.restore() }
   })
 

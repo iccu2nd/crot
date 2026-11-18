@@ -402,11 +402,20 @@ export class PgStore implements Store {
     )
   }
 
+  /**
+   * Seri yang perlu diperkaya lewat halaman detail: (1) cover kosong/rusak (diurutkan paling dulu; dicoba ulang tiap 6 jam
+   * bila detail pun tak punya cover) atau (2) belum pernah diambil detailnya dan tanpa genre.
+   */
   async needingDetail(limit: number) {
     const { rows } = await this.pool.query<Row>(
       `SELECT s.provider, s.ref FROM series s
-       WHERE s.detail_fetched_at IS NULL AND NOT EXISTS (SELECT 1 FROM series_genres sg WHERE sg.series_id = s.id)
-       ORDER BY s.last_seen_at DESC LIMIT $1`,
+       WHERE (
+         (s.cover !~ '^https?://' OR s.cover ~ 'data:')
+         AND (s.detail_fetched_at IS NULL OR s.detail_fetched_at < now() - interval '6 hours')
+       ) OR (
+         s.detail_fetched_at IS NULL AND NOT EXISTS (SELECT 1 FROM series_genres sg WHERE sg.series_id = s.id)
+       )
+       ORDER BY (s.cover !~ '^https?://' OR s.cover ~ 'data:') DESC, s.last_seen_at DESC LIMIT $1`,
       [limit]
     )
     return rows.map(r => ({ provider: r.provider as ProviderKey, ref: r.ref as string }))

@@ -195,6 +195,34 @@ export class ScraperService {
     if (this.o.cfg.serverless) await safe
   }
 
+  private readonly coverJobs = new Set<string>()
+
+  /**
+   * Seri di daftar yang covernya kosong: ambil halaman detailnya di background (maks. 3 paralel) supaya cover tersimpan di DB
+   * dan request daftar berikutnya sudah membawanya. Tidak di serverless (proses dibekukan setelah respons).
+   */
+  private fillCovers(items: SeriesSummary[]) {
+    if (this.o.cfg.serverless) return
+    const todo = items.filter(i => i.id && !/^https?:\/\//.test(i.cover || '') && !this.coverJobs.has(i.id)).slice(0, 9)
+    if (!todo.length) return
+    todo.forEach(i => this.coverJobs.add(i.id))
+    const queue = [...todo]
+    void Promise.all(
+      Array.from({ length: Math.min(3, queue.length) }, async () => {
+        for (let it = queue.shift(); it; it = queue.shift()) {
+          try {
+            const { provider, ref } = parseId(it.id)
+            await this.refreshDetail(provider, ref)
+          } catch {
+            /* gagal -> dicoba lagi oleh warmer (needingDetail) */
+          } finally {
+            setTimeout(() => this.coverJobs.delete(it.id), 10 * 60_000).unref()
+          }
+        }
+      })
+    )
+  }
+
   providers() {
     return [...this.adapters.values()].map((a, i) => ({
       key: a.key,
@@ -264,6 +292,7 @@ export class ScraperService {
     }
 
     const data = mergeSeries(alive.map(r => r.items))
+    this.fillCovers(data)
     const source: DataSource = alive.some(r => r.state === 'miss') ? 'upstream' : alive.some(r => r.state === 'stale') ? 'stale' : 'cache'
     return {
       data,
@@ -292,6 +321,7 @@ export class ScraperService {
 
   private async dbList(key: string, q: PageQuery, load: () => Promise<SeriesSummary[]>): Promise<ListResult> {
     const { value, state } = await this.o.cache.getOrSet(key, this.o.cfg.ttl.db, load)
+    this.fillCovers(value)
     return {
       data: value,
       meta: { page: q.page, limit: q.limit, count: value.length, providers: {}, degraded: false, source: state === 'hit' ? 'cache' : state === 'stale' ? 'stale' : 'db' }

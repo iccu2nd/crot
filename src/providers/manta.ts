@@ -35,11 +35,34 @@ const loc = (v: any): string => (v && typeof v === 'object' ? (v.en ?? Object.va
 const tagNames = (list: any[] | undefined): string[] =>
   (list ?? []).map(t => (typeof t === 'string' ? t : loc(t.name))).filter(Boolean)
 
+const httpUrl = (u: unknown): string => {
+  const v = typeof u === 'string' ? u.trim() : ''
+  if (v.startsWith('//')) return `https:${v}`
+  return /^https?:\/\//i.test(v) && !/^data:/i.test(v) ? v : ''
+}
+
+const COVER_KEYS = ['1280x1840_720', '1280x1840_480', '1440x1440_720', '1440x1440_480', 'thumbnail1']
+
+/**
+ * Cover dari objek `image` Manta. Ukuran yang dikenal dicoba dulu; bila API mengirim ukuran/bentuk lain
+ * (list home, search, dan detail tidak selalu memakai key yang sama) ambil ukuran portrait terdekat ke 720px,
+ * agar cover tidak kosong hanya karena nama key berubah.
+ */
 function cover(image: Raw = {}): string {
-  for (const k of ['1280x1840_720', '1280x1840_480', '1440x1440_720', '1440x1440_480', 'thumbnail1']) {
-    if (image[k]?.downloadUrl) return image[k].downloadUrl
+  if (!image || typeof image !== 'object') return httpUrl(image)
+  for (const k of COVER_KEYS) {
+    const u = httpUrl(image[k]?.downloadUrl)
+    if (u) return u
   }
-  return ''
+  const direct = httpUrl(image.downloadUrl)
+  if (direct) return direct
+  const found = Object.entries(image)
+    .map(([k, v]) => ({ k, u: httpUrl((v as Raw | undefined)?.downloadUrl), m: k.match(/^(\d+)x(\d+)/) }))
+    .filter(x => x.u)
+    .map(x => ({ u: x.u, w: x.m ? +x.m[1] : 0, portrait: x.m ? +x.m[2] > +x.m[1] : false }))
+  const pool = found.some(x => x.portrait) ? found.filter(x => x.portrait) : found
+  pool.sort((a, b) => Math.abs(a.w - 720) - Math.abs(b.w - 720))
+  return pool[0]?.u ?? ''
 }
 
 function typeOf(n: unknown, tags: Raw[] = []): string {
@@ -62,7 +85,7 @@ function toSummary(raw: Raw): SeriesSummary | null {
     id,
     provider: KEY,
     title,
-    cover: cover(raw.image) || raw.coverImage?.downloadUrl || '',
+    cover: cover(raw.image) || cover(raw.series?.image) || httpUrl(raw.coverImage?.downloadUrl) || httpUrl(raw.thumbnail?.downloadUrl) || '',
     url: `${BASE}/en/series/${ref}`,
     type: typeOf(raw.type ?? raw.seriesType, d.tags),
     status: statusOf(d.isCompleted),
@@ -145,7 +168,15 @@ export function createManta(): ProviderAdapter {
     async latest({ page, limit, type = 'comic' }) {
       const res = await getJson(`/front/v1/home/${HOME_VERSION}?lang=en&homeType=${SECTIONS[type] || 'comics'}`)
       const map: Raw = res.data?.seriesMap ?? {}
-      const items = compact<SeriesSummary>((res.data?.items ?? []).map((it: Raw) => toSummary({ ...(map[it.seriesId] ?? {}), ...it })))
+      const items = compact<SeriesSummary>(
+        (res.data?.items ?? []).map((it: Raw) => {
+          const base: Raw = map[it.seriesId] ?? {}
+          const merged: Raw = { ...base, ...it }
+          // Item feed bisa membawa `image` sendiri (banner/ukuran lain) yang menimpa gambar seri -> cover kosong. Pakai yang punya cover.
+          if (!cover(it.image) && cover(base.image)) merged.image = base.image
+          return toSummary(merged)
+        })
+      )
       return items.slice((page - 1) * limit, page * limit)
     },
 
@@ -159,7 +190,7 @@ export function createManta(): ProviderAdapter {
         id,
         provider: KEY,
         title: String(loc(d.title) || head.title || ref).trim(),
-        cover: cover(s.image) || head.image || '',
+        cover: cover(s.image) || httpUrl(head.image) || '',
         url: `${BASE}/en/series/${ref}`,
         type: typeOf(s.type, d.tags),
         status: statusOf(d.isCompleted),
