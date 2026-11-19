@@ -42,8 +42,10 @@ export class Cache {
     key: string,
     ttl: Ttl,
     load: () => Promise<T>,
-    fallback?: () => Promise<T | null>
+    fallback?: () => Promise<T | null>,
+    force = false
   ): Promise<{ value: T; state: CacheState }> {
+    if (force) return { value: await this.refresh(key, ttl, load), state: 'miss' }
     const mem = this.l1.get(key) as Envelope<T> | undefined
     if (mem && Date.now() < mem.f) return { value: mem.v, state: 'hit' }
     const env = await this.read<T>(key)

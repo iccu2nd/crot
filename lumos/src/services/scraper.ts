@@ -414,7 +414,17 @@ export class ScraperService {
 
   // ------------------------------------------------------------------ detail & chapter (dengan fallback)
 
-  private detailFrom(p: ProviderAdapter, ref: string) {
+  private readonly forcedAt = new Map<string, number>()
+  /** Ambil ulang manual dari pengguna: dibatasi 1x per kunci per menit di server (di luar batas harian di aplikasi). */
+  private allowForce(key: string): boolean {
+    const now = Date.now()
+    if (now - (this.forcedAt.get(key) ?? 0) < 60_000) return false
+    this.forcedAt.set(key, now)
+    if (this.forcedAt.size > 500) for (const [k, t] of this.forcedAt) if (now - t >= 60_000) this.forcedAt.delete(k)
+    return true
+  }
+
+  private detailFrom(p: ProviderAdapter, ref: string, force = false) {
     return this.o.cache.getOrSet<SeriesDetail>(
       `d2:${p.key}:${ref}`,
       this.o.cfg.ttl.detail,
@@ -425,12 +435,13 @@ export class ScraperService {
       },
       // Cache kosong (Redis restart / TTL habis) tapi seri pernah diambil -> langsung dari PostgreSQL, refresh di background.
       // Di serverless proses dibekukan setelah respons, jadi refresh background tidak bisa diandalkan -> tanpa fallback.
-      this.o.cfg.serverless ? undefined : () => this.o.store.detailLocal(p.key, ref)
+      this.o.cfg.serverless ? undefined : () => this.o.store.detailLocal(p.key, ref),
+      force
     )
   }
 
-  private chapterFrom(p: ProviderAdapter, ref: string) {
-    return this.o.cache.getOrSet<ChapterContent>(`c:${p.key}:${ref}`, this.o.cfg.ttl.chapter, () => this.call(p, () => p.chapter(ref)))
+  private chapterFrom(p: ProviderAdapter, ref: string, force = false) {
+    return this.o.cache.getOrSet<ChapterContent>(`c:${p.key}:${ref}`, this.o.cfg.ttl.chapter, () => this.call(p, () => p.chapter(ref)), undefined, force)
   }
 
   /** Ambil chapter berikutnya di background supaya "lanjut baca" langsung dari cache. Kegagalan diabaikan. */
@@ -470,13 +481,14 @@ export class ScraperService {
     return out.filter(s => this.adapters.has(s.provider)).sort((a, b) => order.indexOf(a.provider) - order.indexOf(b.provider))
   }
 
-  async detail(id: string): Promise<{ data: SeriesDetail; meta: ItemMeta }> {
+  async detail(id: string, refresh = false): Promise<{ data: SeriesDetail; meta: ItemMeta }> {
     const { provider, ref } = parseId(id)
     const primary = this.adapter(provider)
+    const force = refresh && this.allowForce(`d:${id}`)
     let failure: unknown
     try {
-      const r = await withDeadline(this.detailFrom(primary, ref), this.o.cfg.primaryTimeoutMs)
-      this.o.views.hit(provider, ref)
+      const r = await withDeadline(this.detailFrom(primary, ref, force), this.o.cfg.primaryTimeoutMs)
+      if (!force) this.o.views.hit(provider, ref)
       return { data: r.value, meta: { provider, requestedId: id, fallback: false, source: stateToSource(r.state) } }
     } catch (e) {
       failure = e
@@ -492,17 +504,18 @@ export class ScraperService {
     throw failure
   }
 
-  async chapters(id: string): Promise<{ data: ChapterSummary[]; meta: ItemMeta }> {
-    const { data, meta } = await this.detail(id)
+  async chapters(id: string, refresh = false): Promise<{ data: ChapterSummary[]; meta: ItemMeta }> {
+    const { data, meta } = await this.detail(id, refresh)
     return { data: data.chapters, meta }
   }
 
-  async chapter(id: string): Promise<{ data: ChapterContent; meta: ItemMeta }> {
+  async chapter(id: string, refresh = false): Promise<{ data: ChapterContent; meta: ItemMeta }> {
     const { provider, ref } = parseId(id)
     const primary = this.adapter(provider)
+    const force = refresh && this.allowForce(`c:${id}`)
     let failure: unknown
     try {
-      const r = await withDeadline(this.chapterFrom(primary, ref), this.o.cfg.primaryTimeoutMs)
+      const r = await withDeadline(this.chapterFrom(primary, ref, force), this.o.cfg.primaryTimeoutMs)
       this.prefetchChapter(r.value.next)
       return { data: r.value, meta: { provider, requestedId: id, fallback: false, source: stateToSource(r.state) } }
     } catch (e) {

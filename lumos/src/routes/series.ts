@@ -6,6 +6,9 @@ const publicCache = (seconds: number, edge = seconds) => ({
   'cache-control': `public, max-age=${seconds}, s-maxage=${edge}, stale-while-revalidate=${Math.max(edge * 10, 600)}`
 })
 
+const NO_STORE = { 'cache-control': 'no-store' }
+const wantsRefresh = (q: unknown) => (q as { refresh?: string } | undefined)?.refresh === '1'
+
 export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async (app, { svc }) => {
   const seriesId = idParam('Id seri unified, mis. "shinigami:<uuid>", "manta:123", "lumos:<slug>"')
 
@@ -20,13 +23,19 @@ export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async (
         response: R.detail
       }
     },
-    async (req, reply) => reply.headers(publicCache(300, 60)).send(await svc.detail(req.params.id))
+    async (req, reply) => {
+      const refresh = wantsRefresh(req.query)
+      return reply.headers(refresh ? NO_STORE : publicCache(300, 60)).send(await svc.detail(req.params.id, refresh))
+    }
   )
 
   app.get<{ Params: { id: string } }>(
     '/series/:id/chapters',
     { schema: { tags: ['series'], summary: 'Daftar chapter (terbaru -> terlama)', params: seriesId, response: R.chapters } },
-    async (req, reply) => reply.headers(publicCache(300, 60)).send(await svc.chapters(req.params.id))
+    async (req, reply) => {
+      const refresh = wantsRefresh(req.query)
+      return reply.headers(refresh ? NO_STORE : publicCache(300, 60)).send(await svc.chapters(req.params.id, refresh))
+    }
   )
 
   app.get<{ Params: { id: string } }>(
@@ -42,6 +51,9 @@ export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async (
         response: R.chapter
       }
     },
-    async (req, reply) => reply.headers(publicCache(900, 3600)).send(await svc.chapter(req.params.id))
+    async (req, reply) => {
+      const refresh = wantsRefresh(req.query)
+      return reply.headers(refresh ? NO_STORE : publicCache(900, 3600)).send(await svc.chapter(req.params.id, refresh))
+    }
   )
 }

@@ -161,6 +161,26 @@ describe('ScraperService detail/chapter fallback', () => {
   })
 })
 
+describe('ScraperService refresh manual', () => {
+  it('refresh=true melewati cache & tidak menghitung view; dibatasi 1x/menit per id', async () => {
+    const a = adapter('manta')
+    const { svc, hits } = make([a.a])
+    await svc.detail('manta:1')
+    assert.equal(a.state.calls, 1)
+    await svc.detail('manta:1')
+    assert.equal(a.state.calls, 1, 'tanpa refresh dari cache')
+    const r = await svc.detail('manta:1', true)
+    assert.equal(a.state.calls, 2, 'refresh mengambil ulang dari provider')
+    assert.equal(r.meta.source, 'upstream')
+    assert.equal(hits.length, 2, 'refresh tidak menambah view')
+    await svc.detail('manta:1', true)
+    assert.equal(a.state.calls, 2, 'refresh kedua dalam semenit dilayani dari cache')
+    await svc.chapter('manta:1:1')
+    await svc.chapter('manta:1:1', true)
+    assert.equal(a.state.calls, 4)
+  })
+})
+
 describe('ScraperService latest: filter type', () => {
   it('Manta difilter di upstream (type dikirim), provider lain difilter dari item.type (type tidak dikirim)', async () => {
     const seen: string[] = []
