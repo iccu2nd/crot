@@ -130,6 +130,24 @@ describe('shinigami', () => {
     } finally { m.restore() }
   })
 
+  it('chapter list: meta tidak dipercaya, lanjut sampai halaman habis (upstream membatasi 12/halaman)', async () => {
+    const page = (n: number) => Array.from({ length: n === 4 ? 5 : 12 }, (_, i) => ({ chapter_id: `c${(n - 1) * 12 + i + 1}`, chapter_number: (n - 1) * 12 + i + 1 }))
+    const m = mockFetch({
+      '/v1/manga/detail/abc': () => ({ json: { retcode: 0, data: { ...manga } } }),
+      'page=1&page_size=100': () => ({ json: { retcode: 0, meta: { total_page: 1 }, data: page(1) } }),
+      'page=2&page_size=100': () => ({ json: { retcode: 0, data: page(2) } }),
+      'page=3&page_size=100': () => ({ json: { retcode: 0, data: page(3) } }),
+      'page=4&page_size=100': () => ({ json: { retcode: 0, data: page(4) } }),
+      'page=5&page_size=100': () => ({ json: { retcode: 0, data: [] } })
+    })
+    try {
+      const d = await createShinigami().detail('abc')
+      assert.equal(d.chapters.length, 41)
+      assert.equal(d.chapters[0].number, '41')
+      assert.equal(d.chapters[40].number, '1')
+    } finally { m.restore() }
+  })
+
   it('retcode != 0 -> error (setelah retry)', async () => {
     const m = mockFetch({ '/v1/manga/list': () => ({ json: { retcode: 5, message: 'bad' } }) })
     try {
