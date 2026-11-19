@@ -416,7 +416,7 @@ export class ScraperService {
 
   private detailFrom(p: ProviderAdapter, ref: string) {
     return this.o.cache.getOrSet<SeriesDetail>(
-      `d:${p.key}:${ref}`,
+      `d2:${p.key}:${ref}`,
       this.o.cfg.ttl.detail,
       async () => {
         const d = await this.call(p, () => p.detail(ref))

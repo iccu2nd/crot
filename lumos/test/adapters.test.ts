@@ -101,7 +101,8 @@ describe('shinigami', () => {
       '/v1/manga/list': () => ({ json: { retcode: 0, data: [manga, { manga_id: '', title: 'x' }, { manga_id: 'n1', title: 'Shinigami News' }] } }),
       '/v1/manga/detail/abc': () => ({ json: { retcode: 0, data: { ...manga, description: 'desc', release_year: 2021 } } }),
       'cursor=cur2': () => ({ json: { retcode: 0, meta: { has_next: false }, data: [{ chapter_id: 'c2', chapter_number: 2 }] } }),
-      'limit=2000': () => ({ json: { retcode: 0, meta: { has_next: true, next_cursor: 'cur2' }, data: [{ chapter_id: 'c1', chapter_number: 1, release_date: '2024-02-01T00:00:00Z' }] } }),
+      'sort_order=asc': () => ({ json: { retcode: 0, meta: { has_next: false }, data: [{ chapter_id: 'c1', chapter_number: 1, release_date: '2024-02-01T00:00:00Z' }] } }),
+      'limit=100': () => ({ json: { retcode: 0, meta: { has_next: true, next_cursor: 'cur2' }, data: [{ chapter_id: 'c1', chapter_number: 1, release_date: '2024-02-01T00:00:00Z' }] } }),
       '/v1/chapter/detail/c2': () => ({ json: { retcode: 0, data: { chapter_id: 'c2', manga_id: 'abc', chapter_number: 2, prev_chapter_id: 'c1', chapter: { base_url: 'https://cdn/', path: '/p/', data: ['1.jpg', 'https://o/2.jpg'] } } } })
     })
     try {
@@ -130,18 +131,19 @@ describe('shinigami', () => {
     } finally { m.restore() }
   })
 
-  it('chapter list: satu request limit=2000, lanjut dengan cursor bila has_next', async () => {
+  it('chapter list: limit=100, ikuti cursor desc + asc lalu digabung', async () => {
     const row = (n: number) => ({ chapter_id: `c${n}`, chapter_number: n })
     const m = mockFetch({
       '/v1/manga/detail/abc': () => ({ json: { retcode: 0, data: { ...manga } } }),
       'cursor=k2': () => ({ json: { retcode: 0, meta: { has_next: false }, data: [row(1), row(2)] } }),
       'cursor=k1': () => ({ json: { retcode: 0, meta: { has_next: true, next_cursor: 'k2' }, data: [row(3), row(4), row(5)] } }),
-      'limit=2000': () => ({ json: { retcode: 0, meta: { has_next: true, next_cursor: 'k1' }, data: [row(6), row(7), row(8)] } })
+      'sort_order=asc': () => ({ json: { retcode: 0, meta: { has_next: false }, data: [row(1), row(2)] } }),
+      'limit=100': () => ({ json: { retcode: 0, meta: { has_next: true, next_cursor: 'k1' }, data: [row(6), row(7), row(8)] } })
     })
     try {
       const d = await createShinigami().detail('abc')
       assert.deepEqual(d.chapters.map(c => c.number), ['8', '7', '6', '5', '4', '3', '2', '1'])
-      assert.ok(m.calls.some(u => u.includes('/chapter/abc/list') && u.includes('limit=2000')))
+      assert.ok(m.calls.some(u => u.includes('/chapter/abc/list') && u.includes('limit=100')))
       assert.ok(!m.calls.some(u => u.includes('page_size')))
     } finally { m.restore() }
   })

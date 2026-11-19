@@ -57,24 +57,38 @@ async function list(q: string, page: number, size: number, type?: string): Promi
   return compact((res.data ?? []).map(toSummary))
 }
 
-const CHAPTER_LIMIT = 2000
-const MAX_REQUESTS = 20
+const CHAPTER_LIMIT = 100
+const MAX_REQUESTS = 100
 
-async function chapterList(id: string) {
-  const seen = new Map<string, Raw>()
+async function walkChapters(id: string, order: 'asc' | 'desc', seen: Map<string, Raw>) {
   let cursor = ''
   for (let i = 0; i < MAX_REQUESTS; i++) {
-    const qs = new URLSearchParams({ limit: String(CHAPTER_LIMIT), sort_by: 'chapter_number', sort_order: 'desc' })
+    const qs = new URLSearchParams({ sort_by: 'chapter_number', sort_order: order, limit: String(CHAPTER_LIMIT) })
     if (cursor) qs.set('cursor', cursor)
-    const res = await api(`/v1/chapter/${id}/list?${qs}`)
+    let res: Raw
+    try {
+      res = await api(`/v1/chapter/${id}/list?${qs}`)
+    } catch (e) {
+      if (i === 0) throw e
+      return
+    }
     let fresh = 0
     for (const c of res.data ?? []) {
       const key = c?.chapter_id ? String(c.chapter_id) : ''
       if (key && !seen.has(key)) { seen.set(key, c); fresh++ }
     }
-    const next = res.meta?.has_next && res.meta?.next_cursor ? String(res.meta.next_cursor) : ''
-    if (!next || !fresh || next === cursor) break
+    const next = res.meta?.next_cursor ? String(res.meta.next_cursor) : ''
+    if (!next || next === cursor || res.meta?.has_next === false) return
     cursor = next
+  }
+}
+
+async function chapterList(id: string) {
+  const seen = new Map<string, Raw>()
+  const results = await Promise.allSettled([walkChapters(id, 'desc', seen), walkChapters(id, 'asc', seen)])
+  if (!seen.size) {
+    const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+    if (failed) throw failed.reason
   }
   return [...seen.values()]
     .map((c: Raw) => ({
