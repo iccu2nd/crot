@@ -57,35 +57,24 @@ async function list(q: string, page: number, size: number, type?: string): Promi
   return compact((res.data ?? []).map(toSummary))
 }
 
-const PAGE_SIZE = 100
-const BATCH = 6
-const MAX_PAGES = 120
+const CHAPTER_LIMIT = 2000
+const MAX_REQUESTS = 20
 
 async function chapterList(id: string) {
-  const fetchPage = (n: number) =>
-    api(`/v1/chapter/${id}/list?${new URLSearchParams({ page: String(n), page_size: String(PAGE_SIZE), sort_by: 'chapter_number', sort_order: 'desc' })}`)
   const seen = new Map<string, Raw>()
-  const add = (r: Raw | null) => {
+  let cursor = ''
+  for (let i = 0; i < MAX_REQUESTS; i++) {
+    const qs = new URLSearchParams({ limit: String(CHAPTER_LIMIT), sort_by: 'chapter_number', sort_order: 'desc' })
+    if (cursor) qs.set('cursor', cursor)
+    const res = await api(`/v1/chapter/${id}/list?${qs}`)
     let fresh = 0
-    for (const c of r?.data ?? []) {
+    for (const c of res.data ?? []) {
       const key = c?.chapter_id ? String(c.chapter_id) : ''
       if (key && !seen.has(key)) { seen.set(key, c); fresh++ }
     }
-    return fresh
-  }
-  const first = await fetchPage(1)
-  add(first)
-  const perPage = (first.data ?? []).length
-  const meta: Raw = first.meta ?? {}
-  const total = Number(meta.total_record ?? meta.total_data ?? meta.total_items ?? meta.total) || 0
-  const hint = Math.max(Number(meta.total_page ?? meta.total_pages) || 1, perPage && total ? Math.ceil(total / perPage) : 1)
-  for (let n = 2; n <= MAX_PAGES && perPage > 0; ) {
-    const size = n <= hint ? Math.min(BATCH, hint - n + 1, MAX_PAGES - n + 1) : 1
-    const pages = Array.from({ length: size }, (_, i) => n + i)
-    const res = await Promise.all(pages.map(p => fetchPage(p).catch(e => { if (p <= hint) throw e; return null })))
-    const fresh = res.reduce((sum, r) => sum + add(r), 0)
-    n += size
-    if (n > hint && fresh === 0) break
+    const next = res.meta?.has_next && res.meta?.next_cursor ? String(res.meta.next_cursor) : ''
+    if (!next || !fresh || next === cursor) break
+    cursor = next
   }
   return [...seen.values()]
     .map((c: Raw) => ({
