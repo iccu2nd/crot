@@ -18,6 +18,8 @@ import { authRoutes } from './routes/auth.js'
 import { commentRoutes } from './routes/comments.js'
 import { xpRoutes } from './routes/xp.js'
 import { readingRoutes } from './routes/reading.js'
+import { libraryRoutes } from './routes/library.js'
+import { LibraryService } from './services/library.js'
 import { catalogRoutes } from './routes/catalog.js'
 import { seriesRoutes } from './routes/series.js'
 import { systemRoutes } from './routes/system.js'
@@ -161,6 +163,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
       await v1.register(commentRoutes, { auth, comments })
       await v1.register(xpRoutes, { auth, xp })
       await v1.register(readingRoutes, { auth, reading })
+      await v1.register(libraryRoutes, { auth, library: new LibraryService(pool) })
       await v1.register(announcementRoutes, { repo: new AnnouncementRepo(pool) })
       await v1.register(notificationRoutes, { auth, notifications: new NotificationService(pool) })
       await v1.register(adminRoutes, { auth, store, announcements: new AnnouncementRepo(pool), adminToken: cfg.adminToken, ownerEmails: cfg.auth.ownerEmails })
