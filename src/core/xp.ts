@@ -39,3 +39,24 @@ export function levelFor(xp: number): LevelInfo {
   }
   return { level, into: left, need: levelCost(level) }
 }
+
+const WIB_MS = 7 * 3600_000
+const DAY_MS = 86_400_000
+
+export interface WeekWindow {
+  /** Tanggal Senin minggu ini (WIB), "YYYY-MM-DD" — cocok dengan kolom xp_events.day */
+  startDay: string
+  /** Awal minggu (Senin 00.00 WIB), epoch ms */
+  startAt: number
+  /** Awal minggu berikutnya = waktu reset papan peringkat, epoch ms */
+  endAt: number
+}
+
+/** Jendela papan peringkat mingguan: Senin 00.00 WIB sampai Senin berikutnya (murni, mudah diuji). */
+export function weekWindow(now = Date.now()): WeekWindow {
+  const wall = now + WIB_MS // "jam dinding" WIB dibaca sebagai UTC
+  const dayStart = Math.floor(wall / DAY_MS) * DAY_MS
+  const sinceMonday = (new Date(dayStart).getUTCDay() + 6) % 7 // Senin = 0
+  const start = dayStart - sinceMonday * DAY_MS
+  return { startDay: new Date(start).toISOString().slice(0, 10), startAt: start - WIB_MS, endAt: start + 7 * DAY_MS - WIB_MS }
+}

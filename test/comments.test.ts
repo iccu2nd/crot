@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { checkTarget, cleanComment, isJpeg } from '../src/core/comments.js'
 import { CommentService } from '../src/services/comments.js'
-import { XP_RULES, levelCost, levelFor } from '../src/core/xp.js'
+import { XP_RULES, levelCost, levelFor, weekWindow } from '../src/core/xp.js'
 import { XpService } from '../src/services/xp.js'
 
 test('target komentar: seri & chapter valid, lainnya ditolak', () => {
@@ -220,4 +220,41 @@ test('XpService: ledger (sekali per ref + batas harian) dan validasi laporan dar
   await assert.rejects(svc.report(7, 'comment', 'x:y'), /tidak valid/) // jenis server-only ditolak
   await assert.rejects(svc.report(7, 'read', 'tanpa titik dua'), /Referensi/)
   await assert.rejects(svc.report(7, 'bookmark', undefined), /Referensi/)
+})
+
+test('jendela mingguan: Senin 00.00 WIB sampai Senin berikutnya', () => {
+  // Rabu 2026-11-18 10:00 WIB -> minggu mulai Senin 2026-11-16 00:00 WIB (= 15 Nov 17:00 UTC)
+  const w = weekWindow(Date.parse('2026-11-18T03:00:00Z'))
+  assert.equal(w.startDay, '2026-11-16')
+  assert.equal(new Date(w.startAt).toISOString(), '2026-11-15T17:00:00.000Z')
+  assert.equal(new Date(w.endAt).toISOString(), '2026-11-22T17:00:00.000Z')
+  // Senin 00.00 WIB tepat = awal minggu baru; semenit sebelumnya masih minggu lalu
+  assert.equal(weekWindow(Date.parse('2026-11-15T17:00:00Z')).startDay, '2026-11-16')
+  assert.equal(weekWindow(Date.parse('2026-11-15T16:59:00Z')).startDay, '2026-11-09')
+  // Minggu malam 23.59 WIB masih minggu yang sama (Senin 16 Nov)
+  assert.equal(weekWindow(Date.parse('2026-11-22T16:59:00Z')).startDay, '2026-11-16')
+})
+
+test('leaderboard: urutan, tanpa email bocor, posisi sendiri di luar limit', async () => {
+  const calls: { sql: string; params: unknown[] }[] = []
+  const row = (rank: number, id: number, wxp: number, extra: Record<string, unknown> = {}) =>
+    ({ rank, user_id: id, wxp, username: 'u' + id, display_name: null, xp: 40, email: `u${id}@x.id`, verified: false, premium: false, verified_hidden: false, avatar_v: 0, total: 120, ...extra })
+  const pool = {
+    async query(sql: string, params: unknown[]) {
+      calls.push({ sql, params })
+      return { rows: [row(1, 7, 90, { email: 'Owner@X.id', verified_hidden: true }), row(2, 3, 80, { premium: true }), row(77, 9, 5)] }
+    }
+  }
+  const board = await new XpService(pool as never, ['owner@x.id']).leaderboard(9, 2, Date.parse('2026-11-18T03:00:00Z'))
+  assert.deepEqual(calls[0].params, ['2026-11-16', 2, 9])
+  assert.match(calls[0].sql, /banned_at IS NULL/)
+  assert.equal(board.total, 120)
+  assert.deepEqual(board.items.map(i => [i.rank, i.id, i.weekXp]), [[1, 7, 90], [2, 3, 80]]) // baris ke-77 hanya untuk `me`
+  assert.deepEqual(board.me, { rank: 77, weekXp: 5 })
+  assert.ok(board.items[0].isOwner && !board.items[0].verified) // owner tapi centang disembunyikan
+  assert.ok(board.items[1].premium)
+  assert.ok(!JSON.stringify(board).includes('@'))
+  const anon = await new XpService(pool as never).leaderboard(null, 2)
+  assert.equal(anon.me, null)
+  assert.equal((await new XpService({ query: async () => ({ rows: [] }) } as never).leaderboard(1)).total, 0)
 })

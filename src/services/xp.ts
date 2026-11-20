@@ -1,6 +1,6 @@
 import type { Pool } from 'pg'
 import { ValidationError } from '../core/errors.js'
-import { CLIENT_KINDS, XP_RULES, type XpKind } from '../core/xp.js'
+import { CLIENT_KINDS, XP_RULES, levelFor, weekWindow, type XpKind } from '../core/xp.js'
 
 const REF_RE = /^[a-z0-9_-]{2,20}:[^\s]{1,300}$/i
 /** Tanggal hari ini di WIB (UTC+7), dipakai sebagai ref untuk bonus harian. */
@@ -8,7 +8,10 @@ const wibDay = (now = Date.now()) => new Date(now + 7 * 3600_000).toISOString().
 
 /** Pemberian XP: tiap (user, jenis, ref) hanya sekali + batas harian per jenis; dicatat di xp_events. */
 export class XpService {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly ownerEmails: string[] = []
+  ) {}
 
   /** Beri XP bila belum pernah & kuota harian belum habis. Mengembalikan XP yang didapat (0 = tidak ada). */
   async award(userId: number, kind: XpKind, ref: string): Promise<number> {
@@ -35,4 +38,78 @@ export class XpService {
     if (typeof ref !== 'string' || !REF_RE.test(ref)) throw new ValidationError('Referensi tidak valid')
     return this.award(userId, kind, ref)
   }
+
+  /**
+   * Papan peringkat XP mingguan (Senin 00.00 WIB → Senin berikutnya): jumlah XP dari buku besar `xp_events` pada minggu berjalan.
+   * Seri skor: yang lebih dulu mencapai skor itu di atas. Akun yang diblokir tidak ikut. `meId` (opsional) → posisi peminta, walau di luar `limit`.
+   */
+  async leaderboard(meId: number | null, limit = 50, now = Date.now()): Promise<Leaderboard> {
+    const win = weekWindow(now)
+    const { rows } = await this.pool.query(
+      `WITH w AS (
+         SELECT e.user_id, sum(e.xp)::int AS wxp, max(e.created_at) AS last_at
+           FROM xp_events e WHERE e.day >= $1::date GROUP BY e.user_id
+       ), r AS (
+         SELECT w.user_id, w.wxp, u.username, u.display_name, u.xp, u.email, u.verified, u.premium, u.verified_hidden,
+                CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v,
+                row_number() OVER (ORDER BY w.wxp DESC, w.last_at ASC, w.user_id ASC)::int AS rank
+           FROM w JOIN users u ON u.id = w.user_id WHERE u.banned_at IS NULL
+       )
+       SELECT r.*, (SELECT count(*) FROM r)::int AS total FROM r WHERE r.rank <= $2::int OR r.user_id = $3::int ORDER BY r.rank`,
+      [win.startDay, limit, meId ?? 0]
+    )
+    const toEntry = (r: Record<string, unknown>): RankEntry => {
+      const email = String(r.email ?? '').toLowerCase()
+      const isOwner = !!email && this.ownerEmails.includes(email)
+      return {
+        rank: Number(r.rank),
+        id: Number(r.user_id),
+        username: String(r.username),
+        displayName: String(r.display_name ?? ''),
+        avatarV: Number(r.avatar_v ?? 0),
+        level: levelFor(Number(r.xp ?? 0)).level,
+        verified: (r.verified === true || isOwner) && r.verified_hidden !== true,
+        isOwner,
+        premium: r.premium === true,
+        weekXp: Number(r.wxp)
+      }
+    }
+    const all = rows.map(toEntry)
+    const mine = meId ? all.find(e => e.id === meId) : undefined
+    return {
+      weekStart: win.startAt,
+      resetAt: win.endAt,
+      now,
+      total: rows.length ? Number(rows[0].total) : 0,
+      items: all.filter(e => e.rank <= limit),
+      me: mine ? { rank: mine.rank, weekXp: mine.weekXp } : null
+    }
+  }
+}
+
+export interface RankEntry {
+  rank: number
+  id: number
+  username: string
+  displayName: string
+  avatarV: number
+  level: number
+  verified: boolean
+  isOwner: boolean
+  premium: boolean
+  weekXp: number
+}
+
+export interface Leaderboard {
+  /** awal minggu (Senin 00.00 WIB), epoch ms */
+  weekStart: number
+  /** waktu reset berikutnya (Senin 00.00 WIB), epoch ms */
+  resetAt: number
+  /** jam server saat dihitung, epoch ms (untuk hitung mundur tanpa bergantung jam perangkat) */
+  now: number
+  /** jumlah pengguna yang punya XP minggu ini */
+  total: number
+  items: RankEntry[]
+  /** posisi peminta bila login & sudah punya XP minggu ini */
+  me: { rank: number; weekXp: number } | null
 }

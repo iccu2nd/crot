@@ -22,4 +22,24 @@ export const xpRoutes: FastifyPluginAsync<{ auth: AuthService; xp: XpService }> 
       return { data: { gained, user: gained ? await auth.me(req.headers.authorization) : me } }
     }
   )
+
+  app.get(
+    '/xp/leaderboard',
+    {
+      schema: {
+        tags: ['auth'],
+        summary: 'Papan peringkat XP mingguan (Senin 00.00 WIB → Senin berikutnya)',
+        description:
+          'Diurutkan dari XP terbanyak yang dikumpulkan pada minggu berjalan. Bila request membawa token login, `me` berisi posisi peminta (juga bila di luar `limit`). `resetAt` = kapan papan di-reset.',
+        querystring: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 } } }
+      },
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } }
+    },
+    async (req, reply) => {
+      const me = await auth.me(req.headers.authorization).catch(() => null) // login opsional
+      const { limit = 50 } = req.query as { limit?: number }
+      void reply.header('cache-control', 'private, no-store')
+      return { data: await xp.leaderboard(me?.id ?? null, limit) }
+    }
+  )
 }
