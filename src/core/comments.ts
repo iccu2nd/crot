@@ -23,5 +23,7 @@ export function cleanComment(raw: unknown): string {
 }
 
 export const MAX_AVATAR_BYTES = 300 * 1024
+/** Background profil (JPEG ±1080x540 dari app). */
+export const MAX_BANNER_BYTES = 700 * 1024
 /** Foto profil hanya JPEG (app mengubah ukuran & mengonversi sebelum upload). */
 export const isJpeg = (b: unknown): b is Buffer => Buffer.isBuffer(b) && b.length > 4 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff

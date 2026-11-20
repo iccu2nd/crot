@@ -160,7 +160,7 @@ test('profil publik: tanpa email/hash, memuat level & jumlah komentar; tak ada =
   const svc = new AuthService(f.pool as any, cfg, log)
   const a = await svc.register('budi', 'budi@mail.com', 'password1')
   const pub = await svc.publicProfile(a.user.id)
-  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'bio', 'commentCount', 'displayName', 'id', 'isOwner', 'joinedAt', 'level', 'premium', 'username', 'verified', 'xp'])
+  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'bannerV', 'bio', 'commentCount', 'displayName', 'id', 'isOwner', 'joinedAt', 'level', 'premium', 'username', 'verified', 'xp'])
   assert.equal(pub.username, 'budi')
   assert.equal(pub.level, 1)
   assert.equal(pub.commentCount, 3)

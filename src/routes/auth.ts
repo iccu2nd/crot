@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
-import { MAX_AVATAR_BYTES, isJpeg } from '../core/comments.js'
+import { MAX_AVATAR_BYTES, MAX_BANNER_BYTES, isJpeg } from '../core/comments.js'
 import { NotFoundError, ValidationError } from '../core/errors.js'
 import type { AuthService } from '../services/auth.js'
 
@@ -45,7 +45,7 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
   )
 
   // ---- foto profil: JPEG mentah (app sudah memotong persegi & mengecilkan ke ±384px) ----
-  app.addContentTypeParser('image/jpeg', { parseAs: 'buffer', bodyLimit: MAX_AVATAR_BYTES }, (_req, body, done) => done(null, body))
+  app.addContentTypeParser('image/jpeg', { parseAs: 'buffer', bodyLimit: MAX_BANNER_BYTES }, (_req, body, done) => done(null, body))
 
   app.put('/auth/me/avatar', { schema: { tags: ['auth'], summary: 'Ganti foto profil (body = image/jpeg, maks. 300 KB)' }, config: limit(10) }, async (req, reply) => {
     const user = await auth.me(req.headers.authorization)
@@ -61,6 +61,31 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     reply200(reply)
     return { data: await auth.clearAvatar(user.id) }
   })
+
+  app.put('/auth/me/banner', { schema: { tags: ['auth'], summary: 'Ganti background profil (body = image/jpeg, maks. 700 KB)' }, config: limit(10) }, async (req, reply) => {
+    const user = await auth.me(req.headers.authorization)
+    const body = req.body
+    if (!isJpeg(body)) throw new ValidationError('Gambar harus berformat JPEG')
+    if (body.length > MAX_BANNER_BYTES) throw new ValidationError('Gambar terlalu besar (maks. 700 KB)')
+    reply200(reply)
+    return { data: await auth.setBanner(user.id, body) }
+  })
+
+  app.delete('/auth/me/banner', { schema: { tags: ['auth'], summary: 'Hapus background profil' }, config: limit(10) }, async (req, reply) => {
+    const user = await auth.me(req.headers.authorization)
+    reply200(reply)
+    return { data: await auth.clearBanner(user.id) }
+  })
+
+  app.get(
+    '/users/:id/banner',
+    { schema: { tags: ['auth'], summary: 'Background profil pengguna', params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } } } }, config: limit(300) },
+    async (req, reply) => {
+      const buf = await auth.bannerOf((req.params as { id: number }).id)
+      if (!buf) throw new NotFoundError('Belum ada background profil')
+      return reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=31536000, immutable').send(buf)
+    }
+  )
 
   // Publik (dipakai Coil/gambar): URL memuat ?v=<avatarV> sehingga aman di-cache lama.
   app.get(

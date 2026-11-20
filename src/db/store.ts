@@ -769,6 +769,34 @@ export class PgStore implements Store {
     return rowCount ?? 0
   }
 
+  /** Semua komentar (termasuk balasan), terbaru dulu. `q` mencari di isi komentar, username, atau nama tampilan. */
+  async adminListComments(opts: { q?: string; limit: number; offset: number }) {
+    const params: unknown[] = []
+    let w = ''
+    if (opts.q) {
+      params.push(`%${opts.q.toLowerCase()}%`)
+      w = `WHERE (lower(c.body) LIKE $1 OR lower(u.username) LIKE $1 OR lower(COALESCE(u.display_name,'')) LIKE $1)`
+    }
+    params.push(opts.limit, opts.offset)
+    const { rows } = await this.pool.query<Row>(
+      `SELECT c.id, c.target, c.body, c.parent_id AS "parentId", c.created_at AS "createdAt",
+              u.id AS "userId", u.username, u.display_name AS "displayName",
+              CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV"
+         FROM comments c JOIN users u ON u.id = c.user_id ${w}
+        ORDER BY c.id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    )
+    const { rows: cnt } = await this.pool.query<Row>(`SELECT COUNT(*)::int AS n FROM comments c JOIN users u ON u.id = c.user_id ${w}`, params.slice(0, -2))
+    return {
+      total: cnt[0]?.n ?? 0,
+      items: rows.map(r => ({
+        id: Number(r.id), target: String(r.target), body: String(r.body), parentId: r.parentId == null ? null : Number(r.parentId),
+        createdAt: new Date(r.createdAt as string).getTime(), userId: Number(r.userId), username: String(r.username),
+        displayName: (r.displayName as string | null) ?? '', avatarV: Number(r.avatarV ?? 0)
+      }))
+    }
+  }
+
   async adminDeleteComment(commentId: number) {
     const { rowCount } = await this.pool.query('DELETE FROM comments WHERE id = $1', [commentId])
     return (rowCount ?? 0) > 0

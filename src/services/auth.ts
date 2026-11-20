@@ -21,6 +21,8 @@ export interface AuthUser {
   levelNeed: number
   /** versi foto profil (0 = belum ada); dipakai app untuk URL /users/:id/avatar?v= */
   avatarV: number
+  /** versi background profil (0 = belum ada); URL /users/:id/banner?v= */
+  bannerV: number
   /** centang biru (ditetapkan server, mis. akun owner) */
   verified: boolean
   /** true jika email akun ada di OWNER_EMAILS (panel admin) */
@@ -41,6 +43,7 @@ export interface PublicProfile {
   displayName: string
   bio: string
   avatarV: number
+  bannerV: number
   xp: number
   level: number
   /** kapan akun dibuat (epoch ms) */
@@ -61,9 +64,9 @@ type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: strin
 const BAD_LOGIN = 'Username/email atau password salah'
 /** Username hanya boleh diganti sekali per 7 hari. */
 export const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, verified_hidden AS "verifiedHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
+const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, verified_hidden AS "verifiedHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", CASE WHEN banner IS NULL THEN 0 ELSE banner_v END AS "bannerV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
 
-type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; verifiedHidden?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }
+type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; verifiedHidden?: boolean; avatarV?: number; bannerV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }
 /** Waktu bisu (epoch ms) bila masih berlaku, selain itu 0. */
 const mutedUntilMs = (v: Date | string | null | undefined, now = Date.now()): number => {
   const t = v ? new Date(v).getTime() : 0
@@ -81,6 +84,7 @@ const toUser = (r: Row, ownerEmails: string[] = []): AuthUser => {
   displayName: r.displayName ?? '',
   bio: r.bio ?? '',
   avatarV: Number(r.avatarV ?? 0),
+  bannerV: Number(r.bannerV ?? 0),
   verified: r.verified === true || isOwner,
   isOwner,
   premium: r.premium === true,
@@ -266,6 +270,7 @@ export class AuthService {
     const { rows } = await this.pool.query(
       `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.premium, u.verified_hidden, u.created_at AS "createdAt",
               CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
+              CASE WHEN u.banner IS NULL THEN 0 ELSE u.banner_v END AS "bannerV",
               (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"
          FROM users u WHERE u.id = $1`,
       [userId]
@@ -281,6 +286,7 @@ export class AuthService {
       displayName: r.displayName ?? '',
       bio: r.bio ?? '',
       avatarV: Number(r.avatarV ?? 0),
+      bannerV: Number(r.bannerV ?? 0),
       xp,
       level: levelFor(xp).level,
       joinedAt: new Date(r.createdAt).getTime(),
@@ -316,6 +322,25 @@ export class AuthService {
   async avatarOf(userId: number): Promise<Buffer | null> {
     const { rows } = await this.pool.query('SELECT avatar FROM users WHERE id = $1', [userId])
     return (rows[0]?.avatar as Buffer | null) ?? null
+  }
+
+  // ------------------------------------------------------------------ background profil
+
+  async setBanner(userId: number, jpeg: Buffer): Promise<AuthUser> {
+    const { rows } = await this.pool.query('UPDATE users SET banner = $2, banner_v = banner_v + 1 WHERE id = $1 RETURNING ' + COLS, [userId, jpeg])
+    if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
+    return toUser(rows[0], this.cfg.ownerEmails)
+  }
+
+  async clearBanner(userId: number): Promise<AuthUser> {
+    const { rows } = await this.pool.query('UPDATE users SET banner = NULL, banner_v = banner_v + 1 WHERE id = $1 RETURNING ' + COLS, [userId])
+    if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
+    return toUser(rows[0], this.cfg.ownerEmails)
+  }
+
+  async bannerOf(userId: number): Promise<Buffer | null> {
+    const { rows } = await this.pool.query('SELECT banner FROM users WHERE id = $1', [userId])
+    return (rows[0]?.banner as Buffer | null) ?? null
   }
 
   // ------------------------------------------------------------------ google

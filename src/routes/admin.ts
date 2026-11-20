@@ -302,6 +302,31 @@ export const adminRoutes: FastifyPluginAsync<{
     }
   )
 
+  app.get<{ Querystring: { q?: string; page?: number; limit?: number } }>(
+    '/admin/comments',
+    {
+      onRequest: guard,
+      config: strict,
+      schema: {
+        hide: true,
+        querystring: {
+          type: 'object',
+          properties: {
+            q: { type: 'string', maxLength: 200 },
+            page: { type: 'integer', minimum: 1, default: 1 },
+            limit: { type: 'integer', minimum: 1, maximum: 100, default: 30 }
+          }
+        }
+      }
+    },
+    async req => {
+      const page = req.query.page ?? 1
+      const limit = req.query.limit ?? 30
+      const data = await store.adminListComments({ q: req.query.q?.trim() || undefined, limit, offset: (page - 1) * limit })
+      return { data: { ...data, page, limit, hasMore: data.total > page * limit } }
+    }
+  )
+
   app.delete<{ Params: { id: number } }>(
     '/admin/comments/:id',
     { onRequest: guard, config: strict, schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } } },
