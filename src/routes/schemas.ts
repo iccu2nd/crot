@@ -69,7 +69,8 @@ const listMeta = {
     count: { type: 'integer' },
     providers: { type: 'object', additionalProperties: str, description: 'ok | stale | error | timeout | unavailable' },
     degraded: { type: 'boolean', description: 'true jika sebagian provider gagal' },
-    source: { ...str, description: 'upstream | cache | stale | db' }
+    source: { ...str, description: 'upstream | cache | stale | db' },
+    errors: { type: 'object', additionalProperties: str, description: 'Pesan error singkat per provider yang gagal (diagnosa)' }
   }
 } as const
 

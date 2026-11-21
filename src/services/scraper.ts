@@ -31,6 +31,8 @@ export interface ListMeta {
   providers: Record<string, ProviderStatus>
   degraded: boolean
   source: DataSource
+  /** Pesan singkat provider yang gagal (untuk diagnosa), mis. `komiku: HTTP 403 [server: cloudflare]`. */
+  errors?: Record<string, string>
 }
 export interface ListResult {
   data: SeriesSummary[]
@@ -288,6 +290,7 @@ export class ScraperService {
       i => ({ key: pending[i].key, items: [], state: null, status: 'timeout' })
     )
     const providers = Object.fromEntries(settled.map(r => [r.key, r.status]))
+    const errors = Object.fromEntries(settled.flatMap(r => ('error' in r && r.error ? [[r.key, String(r.error).slice(0, 160)]] : [])))
     const alive = settled.filter(r => r.state)
 
     if (!alive.length) {
@@ -297,7 +300,7 @@ export class ScraperService {
         const why = settled.map(r => ('error' in r && r.error ? `${r.key}: ${r.error}` : '')).filter(Boolean).join(' | ')
         throw new UpstreamError(`Semua provider gagal dan belum ada data tersimpan${why ? ` (${why})` : ''}`)
       }
-      return { data: rows, meta: { page: q.page, limit: q.limit, count: rows.length, providers, degraded: true, source: 'db' } }
+      return { data: rows, meta: { page: q.page, limit: q.limit, count: rows.length, providers, degraded: true, source: 'db', ...(Object.keys(errors).length ? { errors } : {}) } }
     }
 
     const data = mergeSeries(alive.map(r => r.items))
@@ -305,7 +308,7 @@ export class ScraperService {
     const source: DataSource = alive.some(r => r.state === 'miss') ? 'upstream' : alive.some(r => r.state === 'stale') ? 'stale' : 'cache'
     return {
       data,
-      meta: { page: q.page, limit: q.limit, count: data.length, providers, degraded: alive.length < settled.length, source }
+      meta: { page: q.page, limit: q.limit, count: data.length, providers, degraded: alive.length < settled.length, source, ...(Object.keys(errors).length ? { errors } : {}) }
     }
   }
 
