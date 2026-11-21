@@ -17,7 +17,6 @@ export const xpRoutes: FastifyPluginAsync<{ auth: AuthService; xp: XpService }> 
     async (req, reply) => {
       const me = await auth.me(req.headers.authorization)
       const b = req.body as { type: string; ref?: string | null }
-      if (me.guest) return { data: { gained: 0, user: me } }
       const gained = await xp.report(me.id, b.type, b.ref)
       void reply.header('cache-control', 'no-store')
       return { data: { gained, user: gained ? await auth.me(req.headers.authorization) : me } }
@@ -40,7 +39,7 @@ export const xpRoutes: FastifyPluginAsync<{ auth: AuthService; xp: XpService }> 
       const me = await auth.me(req.headers.authorization).catch(() => null) // login opsional
       const { limit = 50 } = req.query as { limit?: number }
       void reply.header('cache-control', 'private, no-store')
-      return { data: await xp.leaderboard(me && !me.guest ? me.id : null, limit) }
+      return { data: await xp.leaderboard(me ? me.id : null, limit) }
     }
   )
 }

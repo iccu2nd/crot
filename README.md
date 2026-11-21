@@ -129,7 +129,7 @@ Situs `https://s1.shinigami.mx`, API `https://api.shinigami.io/v1`. Keduanya bis
 
 ## Akun & login
 
-Aplikasi mewajibkan login: username/email + password, atau **Masuk dengan Google**. Endpoint (`/v1/auth/*`, tampil di `/docs`): `register`, `login`, `google`, `me`, dan `config` (memberi tahu app apakah tombol Google aktif, jadi **tidak perlu build ulang APK** saat Google diaktifkan). Tabel `users` dibuat otomatis (migration `003`). Password disimpan sebagai hash scrypt; token login = JWT HS256 berlaku 90 hari. Endpoint katalog tetap publik.
+Login hanya lewat **Masuk dengan Google**; tanpa login, app berjalan sebagai pengunjung (tanpa sesi/akun di server, data hanya di perangkat). Endpoint (`/v1/auth/*`, tampil di `/docs`): `google`, `me`, dan `config` (memberi tahu app apakah tombol Google aktif, jadi **tidak perlu build ulang APK** saat Google diaktifkan). Tabel `users` dibuat otomatis (migration `003`). Migration `025` menghapus akun tamu lama serta kolom `is_guest` dan `password_hash`; token login = JWT HS256 berlaku 90 hari. Endpoint katalog tetap publik.
 
 Env: `JWT_SECRET` (**wajib** di produksi; `openssl rand -hex 32`) dan, opsional untuk Google:
 
@@ -155,12 +155,8 @@ Migration `004` menambah foto profil dan tabel `comments`.
 
 Migration `008`.
 
-- **Verified (centang biru):** kolom `users.verified`, ikut di `GET /auth/me`, `GET /users/:id`, dan tiap komentar (`user.verified`). Akun yang emailnya ada di `OWNER_EMAILS` (default `hihanghoheng1507@gmail.com`) ditandai otomatis: akun yang **sudah ada** saat migration dijalankan, dan akun yang **masuk lewat Google** (email sudah diverifikasi Google). Pendaftaran password dengan email itu *tidak* otomatis, karena emailnya belum terbukti milik pendaftar. Tandai manual: `UPDATE users SET verified = true WHERE username = '...';`.
+- **Verified (centang biru):** kolom `users.verified`, ikut di `GET /auth/me`, `GET /users/:id`, dan tiap komentar (`user.verified`). Akun yang emailnya ada di `OWNER_EMAILS` (default `hihanghoheng1507@gmail.com`) ditandai otomatis: akun yang **sudah ada** saat migration dijalankan, dan akun yang **masuk lewat Google** (email sudah diverifikasi Google). Tandai manual: `UPDATE users SET verified = true WHERE username = '...';`.
 - **Riwayat baca:** `PUT /v1/reading` (wajib login) `{seriesId, chapterId, chapterNumber, chaptersRead, title?}` menimpa satu baris per seri; `GET /v1/users/:id/reading?limit=&before=` (publik, terbaru dulu, `before` = `readAt` item terakhir) memberi `{items: [{seriesId, title, cover, provider, chapterId, chapterNumber, chaptersRead, readAt}], hasMore}`. Judul & cover diambil dari tabel `series` (bukan dari kiriman pengguna, supaya URL cover tidak bisa diisi sembarang); maksimal 200 seri per pengguna (yang terlama dibuang).
 - **Sinkron pustaka:** `POST /v1/library/sync` (wajib login) `{since, entries}` — kirim perubahan lokal (maks. 200 entri `{id,title,cover,provider,bookmarked,lastChapterId,lastChapterNumber,readAt,read[],updatedAt}`) dan terima entri yang berubah sejak `since`; balasan `{now, hasMore, entries}`. Bookmark mengikuti perubahan terbaru, daftar chapter dibaca digabung (union) kecuali riwayat direset di versi yang lebih baru. Maksimal 1500 seri per akun.
 - **Batas level** dinaikkan dari 1000 ke 10000 supaya tier tampilan level 3000/5000 di app bisa tercapai.
 
-## Login tamu (guest)
-`POST /v1/auth/guest` (maks. 5/jam per IP) membuat akun tamu `tamu_xxxxxxxx` tanpa email/password, token berlaku 30 hari; akun tamu yang tak pernah didaftarkan dihapus setelah 35 hari. `user.guest = true`.
-Daftar batasan ada di `GET /v1/auth/config` → `guest.limits`. Server menolak dengan `403 GUEST_RESTRICTED` untuk: kirim komentar, like/dislike, ubah profil/foto, `PUT /reading`, `POST /library/sync`. `POST /xp/event` dibalas `gained: 0` tanpa error, dan tamu tidak masuk papan peringkat.
-Bookmark, riwayat, dan unduhan tetap jalan lokal di app. `POST /v1/auth/guest/upgrade` (token tamu + `username`, `email`, `password`) mengubah akun tamu jadi akun biasa dengan id yang sama, lalu mengembalikan token baru. Migration `024_guest.sql`.

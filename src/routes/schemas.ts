@@ -95,11 +95,6 @@ export const R = {
   chapter: { 200: envelope(chapterContent, itemMeta) }
 }
 
-export const errorSchema = {
-  type: 'object',
-  properties: { error: { type: 'object', properties: { code: str, message: str } } }
-} as const
-
 // ---- query/params ----
 const provider = { type: 'string', enum: [...PROVIDER_KEYS], description: 'Batasi ke satu provider (default: semua + fallback otomatis)' } as const
 const page = { type: 'integer', minimum: 1, maximum: 500, default: 1 } as const

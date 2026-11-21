@@ -1,16 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { checkRegistration, formatCooldown, hashPassword, signToken, slugUsername, verifyPassword, verifyToken } from '../src/core/auth.js'
+import { formatCooldown, signToken, slugUsername, verifyToken } from '../src/core/auth.js'
 import { AuthService } from '../src/services/auth.js'
-
-test('password: hash unik per panggilan, verifikasi benar/salah', async () => {
-  const a = await hashPassword('rahasia123')
-  const b = await hashPassword('rahasia123')
-  assert.notEqual(a, b)
-  assert.ok(await verifyPassword('rahasia123', a))
-  assert.ok(!(await verifyPassword('rahasia124', a)))
-  assert.ok(!(await verifyPassword('x', 'bukan-hash')))
-})
 
 test('token: valid, kedaluwarsa, dirusak, secret lain', () => {
   const now = 1_700_000_000_000
@@ -24,11 +15,7 @@ test('token: valid, kedaluwarsa, dirusak, secret lain', () => {
   assert.equal(verifyToken('a.b', 's3cret', now), null)
 })
 
-test('validasi registrasi & slug username', () => {
-  assert.equal(checkRegistration('budi_01', 'budi@mail.com', 'password1'), null)
-  assert.match(checkRegistration('a', 'budi@mail.com', 'password1')!, /Username/)
-  assert.match(checkRegistration('budi', 'bukan-email', 'password1')!, /email/i)
-  assert.match(checkRegistration('budi', 'budi@mail.com', 'pendek')!, /8 karakter/)
+test('slug username dari email', () => {
   assert.equal(slugUsername('Budi Santoso!'), 'BudiSantoso')
   assert.ok(slugUsername('!!').length >= 3)
 })
@@ -41,27 +28,24 @@ function fakes() {
   const users: any[] = []
   const pool = {
     async query(sql: string, p: any[] = []) {
-      if (sql.startsWith('INSERT INTO users (username, email, password_hash)')) {
+      if (sql.startsWith('INSERT INTO users (username, email, google_sub)')) {
         if (users.some(u => u.username.toLowerCase() === p[0].toLowerCase())) throw Object.assign(new Error('dup'), { code: '23505', constraint: 'users_username_lower' })
-        const u = { id: users.length + 1, username: p[0], email: p[1], password_hash: p[2] }
+        const u = { id: users.length + 1, username: p[0], email: p[1], google_sub: p[2] }
         users.push(u)
         return { rows: [u] }
       }
-      if (sql.startsWith('INSERT INTO users (username, is_guest)')) {
-        if (users.some(u => u.username === p[0])) throw Object.assign(new Error('dup'), { code: '23505', constraint: 'users_username_lower' })
-        const u = { id: users.length + 1, username: p[0], email: null, password_hash: null, isGuest: true }
-        users.push(u)
-        return { rows: [u] }
-      }
-      if (sql.startsWith('UPDATE users SET username = $2, email = $3')) {
-        const [id, username, email, hash] = p
-        const u = users.find(x => x.id === id && x.isGuest)
+      if (sql.includes('WHERE google_sub = $1')) return { rows: users.filter(u => u.google_sub === p[0]).slice(0, 1) }
+      if (sql.startsWith('UPDATE users SET google_sub = $1')) {
+        const u = users.find(x => x.email?.toLowerCase() === String(p[1]).toLowerCase() && !x.google_sub)
         if (!u) return { rows: [] }
-        if (users.some(o => o.id !== id && o.username.toLowerCase() === username.toLowerCase())) throw Object.assign(new Error('dup'), { code: '23505', constraint: 'users_username_lower' })
-        Object.assign(u, { username, email, password_hash: hash, isGuest: false })
+        u.google_sub = p[0]
         return { rows: [u] }
       }
-      if (sql.startsWith('DELETE FROM users WHERE is_guest')) return { rows: [] }
+      if (sql.startsWith('UPDATE users SET verified = true')) {
+        const u = users.find(x => x.id === p[0])
+        if (u) u.verified = true
+        return { rows: u ? [u] : [] }
+      }
       if (sql.startsWith('UPDATE users SET\n           display_name')) {
         const [id, setName, name, setUser, username, setBio, bio] = p
         const u = users.find(x => x.id === id)
@@ -81,7 +65,6 @@ function fakes() {
         if (i >= 0) users.splice(i, 1)
         return { rowCount: i >= 0 ? 1 : 0, rows: [] }
       }
-      if (sql.includes('lower(username) = lower($1)')) return { rows: users.filter(u => u.username.toLowerCase() === p[0].toLowerCase() || u.email?.toLowerCase() === p[0].toLowerCase()).slice(0, 1) }
       if (sql.includes('WHERE id = $1')) return { rows: users.filter(u => u.id === p[0]).map(u => ({ ...u, usernameCooldownSec: cooldown(u) })) }
       throw new Error(`sql tak dikenal: ${sql}`)
     }
@@ -90,20 +73,34 @@ function fakes() {
 }
 const cfg = { jwtSecret: 'x', tokenTtlSec: 3600, googleClientId: '', ownerEmails: [] as string[] }
 const log = { warn() {}, error() {} }
+const fakeGoogle = (async (url: string) => {
+  const email = decodeURIComponent(String(url).split('id_token=')[1])
+  if (!email.includes('@')) return { ok: false, json: async () => ({}) }
+  return { ok: true, json: async () => ({ iss: 'accounts.google.com', aud: 'cid', exp: String(Math.floor(Date.now() / 1000) + 600), email_verified: 'true', sub: `sub-${email}`, email }) }
+}) as any
+const make = (pool: any, c: any = cfg) => new AuthService(pool, { ...c, googleClientId: 'cid' }, log, fakeGoogle)
 
-test('register + login + me', async () => {
+test('login Google: buat akun, masuk lagi = akun sama, me()', async () => {
   const f = fakes()
-  const svc = new AuthService(f.pool as any, cfg, log)
-  const r = await svc.register('budi', 'budi@mail.com', 'password1')
+  const svc = make(f.pool)
+  const r = await svc.google('budi@mail.com')
   assert.equal(r.user.username, 'budi')
-  assert.ok(!JSON.stringify(f.users[0]).includes('password1'))
-  await assert.rejects(svc.register('Budi', 'lain@mail.com', 'password1'), /Username sudah dipakai/)
-  const l = await svc.login('budi@mail.com', 'password1')
+  assert.equal(f.users.length, 1)
+  const l = await svc.google('budi@mail.com')
   assert.equal(l.user.id, r.user.id)
-  await assert.rejects(svc.login('budi', 'salah-salah'), /salah/)
-  await assert.rejects(svc.login('tidak-ada', 'password1'), /salah/)
+  assert.equal(f.users.length, 1)
   assert.equal((await svc.me(`Bearer ${l.token}`)).username, 'budi')
   await assert.rejects(svc.me('Bearer palsu'), /Sesi tidak valid/)
+  await assert.rejects(svc.google('bukan-email'), /Token Google tidak valid/)
+})
+
+test('login Google: email owner otomatis verified', async () => {
+  const f = fakes()
+  const svc = make(f.pool, { ...cfg, ownerEmails: ['owner@x.id'] })
+  const r = await svc.google('owner@x.id')
+  assert.equal(r.user.isOwner, true)
+  assert.equal(r.user.verified, true)
+  assert.equal((await svc.google('lain@x.id')).user.verified, false)
 })
 
 test('login Google tidak aktif bila tidak dikonfigurasi', async () => {
@@ -124,9 +121,9 @@ test('formatCooldown: hari/jam/menit', () => {
 test('profil: ganti nama bebas, username sekali per 7 hari', async () => {
   const f = fakes()
   clock.now = 1_700_000_000_000
-  const svc = new AuthService(f.pool as any, cfg, log)
-  const a = await svc.register('budi', 'budi@mail.com', 'password1')
-  await svc.register('andi', 'andi@mail.com', 'password1')
+  const svc = make(f.pool)
+  const a = await svc.google('budi@mail.com')
+  await svc.google('andi@mail.com')
 
   // nama: dipangkas spasi, kosong = hapus, >30 / karakter kontrol ditolak
   assert.equal((await svc.updateProfile(a.user.id, { displayName: '  Budi   Santoso ' })).displayName, 'Budi Santoso')
@@ -163,8 +160,8 @@ test('profil: ganti nama bebas, username sekali per 7 hari', async () => {
 
 test('hapus akun: akun hilang, token lama tidak berlaku, hapus ulang ditolak', async () => {
   const f = fakes()
-  const svc = new AuthService(f.pool as any, cfg, log)
-  const a = await svc.register('budi', 'budi@mail.com', 'password1')
+  const svc = make(f.pool)
+  const a = await svc.google('budi@mail.com')
   await svc.deleteAccount(a.user.id)
   assert.equal(f.users.length, 0)
   await assert.rejects(svc.me(`Bearer ${a.token}`), /Akun tidak ditemukan/)
@@ -173,8 +170,8 @@ test('hapus akun: akun hilang, token lama tidak berlaku, hapus ulang ditolak', a
 
 test('profil publik: tanpa email/hash, memuat level & jumlah komentar; tak ada = 404', async () => {
   const f = fakes()
-  const svc = new AuthService(f.pool as any, cfg, log)
-  const a = await svc.register('budi', 'budi@mail.com', 'password1')
+  const svc = make(f.pool)
+  const a = await svc.google('budi@mail.com')
   const pub = await svc.publicProfile(a.user.id)
   assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'bio', 'commentCount', 'displayName', 'id', 'isOwner', 'joinedAt', 'level', 'premium', 'readingHidden', 'username', 'verified', 'xp'])
   assert.equal(pub.username, 'budi')
@@ -184,7 +181,7 @@ test('profil publik: tanpa email/hash, memuat level & jumlah komentar; tak ada =
   await assert.rejects(svc.publicProfile(999), /tidak ditemukan/)
 })
 
-test('moderasi: akun diblokir ditolak di me() & login, owner kebal; bisu hanya selama berlaku', async () => {
+test('moderasi: akun diblokir ditolak di me(), owner kebal; bisu hanya selama berlaku', async () => {
   const { assertNotMuted } = await import('../src/routes/comments.js')
   const future = Date.now() + 3_600_000
   assert.throws(() => assertNotMuted({ mutedUntil: future, muteReason: 'spam' }), /dibisukan.*spam/)
@@ -198,35 +195,10 @@ test('moderasi: akun diblokir ditolak di me() & login, owner kebal; bisu hanya s
   assert.equal((await owner.me(`Bearer ${signToken(5, 'x', 60)}`)).isOwner, true)
 })
 
-test('tamu: akun tanpa email/password, tidak bisa login, dibatasi, lalu bisa didaftarkan dengan data tetap', async () => {
-  const { assertMember, GUEST_TTL_SEC } = await import('../src/services/auth.js')
-  const f = fakes()
-  const svc = new AuthService(f.pool as any, cfg, log)
-  const g = await svc.createGuest()
-  assert.equal(g.user.guest, true)
-  assert.match(g.user.username, /^tamu_[0-9a-f]{8}$/)
-  assert.equal((await svc.me(`Bearer ${g.token}`)).guest, true)
-  const claims = JSON.parse(Buffer.from(g.token.split('.')[1], 'base64url').toString())
-  assert.equal(claims.exp - claims.iat, GUEST_TTL_SEC)
-  await assert.rejects(svc.login(g.user.username, 'password1'), /salah/)
-  assert.throws(() => assertMember(g.user, 'berkomentar'), /Daftar atau masuk dulu untuk berkomentar/)
-  await svc.register('budi', 'budi@mail.com', 'password1')
-  await assert.rejects(svc.upgradeGuest(g.user.id, 'budi', 'baru@mail.com', 'password1'), /Username sudah dipakai/)
-  await assert.rejects(svc.upgradeGuest(g.user.id, 'x', 'baru@mail.com', 'password1'), /Username/)
-  const up = await svc.upgradeGuest(g.user.id, 'sari', 'sari@mail.com', 'password1')
-  assert.equal(up.user.id, g.user.id)
-  assert.equal(up.user.guest, false)
-  assert.doesNotThrow(() => assertMember(up.user, 'berkomentar'))
-  const claims2 = JSON.parse(Buffer.from(up.token.split('.')[1], 'base64url').toString())
-  assert.equal(claims2.exp - claims2.iat, cfg.tokenTtlSec)
-  assert.equal((await svc.login('sari@mail.com', 'password1')).user.id, g.user.id)
-  await assert.rejects(svc.upgradeGuest(g.user.id, 'sari2', 'sari2@mail.com', 'password1'), /sudah terdaftar/)
-})
-
 test('sembunyikan "Sedang dibaca": tersimpan di akun dan terbaca di profil publik', async () => {
   const f = fakes()
-  const svc = new AuthService(f.pool as any, cfg, log)
-  const a = await svc.register('budi', 'budi@mail.com', 'password1')
+  const svc = make(f.pool)
+  const a = await svc.google('budi@mail.com')
   assert.equal(a.user.readingHidden, false)
   assert.equal((await svc.updateProfile(a.user.id, { readingHidden: true })).readingHidden, true)
   assert.equal((await svc.publicProfile(a.user.id)).readingHidden, false)
