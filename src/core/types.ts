@@ -114,6 +114,7 @@ export interface Store {
   searchLocal(q: string, p: DbPage): Promise<SeriesSummary[]>
   latestLocal(p: DbPage): Promise<SeriesSummary[]>
   popular(p: DbPage & { days: number }): Promise<SeriesSummary[]>
+  recommended(p: DbPage): Promise<SeriesSummary[]>
   genres(): Promise<GenreRow[]>
   byGenre(slug: string, p: DbPage & GenreFilters): Promise<SeriesSummary[]>
   addViews(rows: { provider: ProviderKey; ref: string; n: number }[]): Promise<void>

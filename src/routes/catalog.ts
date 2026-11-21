@@ -80,6 +80,20 @@ export const catalogRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async 
     async (req, reply) => reply.headers(publicCache(60)).send(await svc.popular(req.query))
   )
 
+  app.get<{ Querystring: Paged }>(
+    '/recommended',
+    {
+      schema: {
+        tags: ['catalog'],
+        summary: 'Rekomendasi',
+        description: 'Seri dengan rating tertinggi (hanya yang punya rating), lalu yang terbaru. Satu baris per judul.',
+        querystring: Q.paged,
+        response: R.list
+      }
+    },
+    async (req, reply) => reply.headers(publicCache(300)).send(await svc.recommended(req.query))
+  )
+
   const genreList = envelope(
     {
       type: 'array',

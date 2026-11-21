@@ -37,6 +37,7 @@ Catatan: cold start sedikit lebih lambat (koneksi DB/Redis). Untuk performa terb
 | `GET /search?q=&page=&limit=&provider=` | cari di semua provider |
 | `GET /latest?page=&limit=&provider=&type=` | update terbaru (`type` = comic/manga/novel; Manta memfilter di upstream, provider lain difilter dari tipe tiap seri) |
 | `GET /popular?days=7&page=&limit=` | populer (lihat catatan) |
+| `GET /recommended?page=&limit=&provider=` | rekomendasi: rating tertinggi (hanya seri berating), lalu terbaru |
 | `GET /genres` | daftar genre (DB + genre native Lumos) |
 | `GET /genres/:slug/series?sort=&type=&status=` | seri per genre; `sort` = latest/popular/rating/az, `type` (format) = manga/manhwa/manhua/comic/novel, `status` = ongoing/completed/hiatus |
 | `GET /series/:id` | detail + daftar chapter |

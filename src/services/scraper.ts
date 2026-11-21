@@ -342,6 +342,11 @@ export class ScraperService {
     return this.dbList(`p:${o.provider ?? ''}:${o.days}:${o.page}:${o.limit}`, o, () => this.o.store.popular({ ...dbPage(o), days: o.days }))
   }
 
+  /** Rekomendasi = rating tertinggi dari data tersimpan. */
+  recommended(o: PageQuery): Promise<ListResult> {
+    return this.dbList(`r:${o.provider ?? ''}:${o.page}:${o.limit}`, o, () => this.o.store.recommended(dbPage(o)))
+  }
+
   async genres(): Promise<{ data: GenreRow[]; source: DataSource }> {
     const { value, state } = await this.o.cache.getOrSet('g:all', this.o.cfg.ttl.genres, async () => {
       const rows = await this.o.store.genres()

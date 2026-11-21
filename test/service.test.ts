@@ -39,7 +39,7 @@ function fakeStore(over: Partial<Store> = {}): Store {
   return {
     syncProviders: noop, saveSummaries: noop, saveDetail: noop, addViews: noop, prune: noop,
     detailLocal: async () => null, findSeries: async () => null, siblings: async () => [], findChapter: async () => null,
-    searchLocal: async () => [], latestLocal: async () => [], popular: async () => [], genres: async () => [], byGenre: async () => [],
+    searchLocal: async () => [], latestLocal: async () => [], popular: async () => [], recommended: async () => [], genres: async () => [], byGenre: async () => [],
     needingDetail: async () => [], ping: async () => true, ...over
   }
 }

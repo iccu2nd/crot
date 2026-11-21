@@ -351,6 +351,18 @@ export class PgStore implements Store {
     )
   }
 
+  /** Rekomendasi = rating tertinggi (hanya seri yang punya rating), lalu yang terbaru. Tidak bergantung pada hit, jadi isinya beda dari Populer. */
+  recommended(p: DbPage) {
+    return this.list(
+      {
+        where: `WHERE s.rating IS NOT NULL AND s.rating > 0${p.provider ? ' AND s.provider = $1' : ''}`,
+        params: p.provider ? [p.provider] : [],
+        order: 'x.rating DESC NULLS LAST, x.last_seen_at DESC, x.id'
+      },
+      p
+    )
+  }
+
   async genres(): Promise<GenreRow[]> {
     const { rows } = await this.pool.query<Row>(
       `SELECT g.slug, g.name, COUNT(DISTINCT s.norm_title)::int AS n
