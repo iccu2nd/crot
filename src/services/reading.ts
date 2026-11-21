@@ -58,7 +58,7 @@ export class ReadingService {
               split_part(r.series_id, ':', 1) AS provider, r.chapter_id, r.chapter_number, r.chapters_read, r.read_at
          FROM reading_progress r
          LEFT JOIN series s ON s.provider = split_part(r.series_id, ':', 1) AND s.ref = substr(r.series_id, position(':' in r.series_id) + 1)
-        WHERE r.user_id = $1 AND ($2::double precision IS NULL OR r.read_at < to_timestamp($2::double precision / 1000.0))
+        WHERE r.user_id = $1 AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = r.user_id AND u.reading_hidden) AND ($2::double precision IS NULL OR r.read_at < to_timestamp($2::double precision / 1000.0))
         ORDER BY r.read_at DESC LIMIT $3`,
       [userId, before ?? null, n + 1]
     )

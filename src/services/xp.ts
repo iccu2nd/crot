@@ -7,7 +7,12 @@ const REF_RE = /^[a-z0-9_-]{2,20}:[^\s]{1,300}$/i
 const wibDay = (now = Date.now()) => new Date(now + 7 * 3600_000).toISOString().slice(0, 10)
 
 /** Pemberian XP: tiap (user, jenis, ref) hanya sekali + batas harian per jenis; dicatat di xp_events. */
+const BOARD_TTL_MS = 8_000
+const BOARD_CACHE_MAX = 200
+
 export class XpService {
+  private readonly boardCache = new Map<string, { until: number; p: Promise<Leaderboard> }>()
+
   constructor(
     private readonly pool: Pool,
     private readonly ownerEmails: string[] = []
@@ -45,6 +50,18 @@ export class XpService {
    */
   async leaderboard(meId: number | null, limit = 50, now = Date.now()): Promise<Leaderboard> {
     const win = weekWindow(now)
+    const key = `${win.startDay}|${limit}|${meId ?? 0}`
+    const hit = this.boardCache.get(key)
+    const t = Date.now()
+    if (hit && t < hit.until) return hit.p
+    const p = this.computeBoard(meId, limit, now, win)
+    this.boardCache.set(key, { until: t + BOARD_TTL_MS, p })
+    p.catch(() => this.boardCache.delete(key))
+    if (this.boardCache.size > BOARD_CACHE_MAX) for (const [k, v] of this.boardCache) if (t >= v.until || this.boardCache.size > BOARD_CACHE_MAX) this.boardCache.delete(k)
+    return p
+  }
+
+  private async computeBoard(meId: number | null, limit: number, now: number, win: ReturnType<typeof weekWindow>): Promise<Leaderboard> {
     const { rows } = await this.pool.query(
       `WITH w AS (
          SELECT e.user_id, sum(e.xp)::int AS wxp, max(e.created_at) AS last_at

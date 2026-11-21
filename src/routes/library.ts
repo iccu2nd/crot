@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
-import type { AuthService } from '../services/auth.js'
+import { assertMember, type AuthService } from '../services/auth.js'
 import type { LibraryService } from '../services/library.js'
 
 export const libraryRoutes: FastifyPluginAsync<{ auth: AuthService; library: LibraryService }> = async (app, { auth, library }) => {
@@ -23,6 +23,7 @@ export const libraryRoutes: FastifyPluginAsync<{ auth: AuthService; library: Lib
     },
     async (req, reply) => {
       const user = await auth.me(req.headers.authorization)
+      assertMember(user, 'menyinkronkan pustaka')
       const b = req.body as { since?: number; entries?: unknown[] }
       void reply.header('cache-control', 'no-store')
       return { data: await library.sync(user.id, b.since ?? 0, b.entries ?? []) }

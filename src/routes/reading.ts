@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
-import type { AuthService } from '../services/auth.js'
+import { assertMember, type AuthService } from '../services/auth.js'
 import type { ReadingService } from '../services/reading.js'
 
 const limit = (max: number) => ({ rateLimit: { max, timeWindow: '1 minute' } })
@@ -28,6 +28,7 @@ export const readingRoutes: FastifyPluginAsync<{ auth: AuthService; reading: Rea
     },
     async (req, reply) => {
       const user = await auth.me(req.headers.authorization)
+      assertMember(user, 'menampilkan bacaan di profil')
       await reading.report(user.id, req.body as Record<string, unknown>)
       void reply.header('cache-control', 'no-store')
       return { data: { ok: true } }

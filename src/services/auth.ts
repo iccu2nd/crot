@@ -29,6 +29,10 @@ export interface AuthUser {
   premium: boolean
   /** pengguna menyembunyikan centang verified-nya dari tampilan publik (`verified` tetap status asli) */
   verifiedHidden: boolean
+  /** pengguna menyembunyikan daftar "Sedang dibaca" dari profil publik */
+  readingHidden: boolean
+  /** akun tamu (masuk tanpa daftar): fitur sosial & sinkronisasi dibatasi sampai daftar lewat /auth/guest/upgrade */
+  guest: boolean
   /** dibisukan sampai kapan (epoch ms); 0 = tidak dibisukan. Selama dibisukan tidak bisa berkomentar. */
   mutedUntil: number
   /** alasan bisu dari owner ('' bila tidak ada) */
@@ -51,6 +55,8 @@ export interface PublicProfile {
   isOwner: boolean
   /** Premium Member */
   premium: boolean
+  /** pemilik menyembunyikan daftar "Sedang dibaca" */
+  readingHidden: boolean
 }
 export interface AuthResult {
   token: string
@@ -59,11 +65,26 @@ export interface AuthResult {
 type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }
 
 const BAD_LOGIN = 'Username/email atau password salah'
+export const GUEST_TTL_SEC = 30 * 24 * 3600
+export const GUEST_PURGE_DAYS = 35
+export const GUEST_LIMITS = [
+  { key: 'comment', label: 'Berkomentar dan membalas' },
+  { key: 'vote', label: 'Memberi like/dislike komentar' },
+  { key: 'profile', label: 'Mengubah nama, bio, username, dan foto' },
+  { key: 'sync', label: 'Sinkronisasi pustaka lintas perangkat' },
+  { key: 'reading', label: 'Menampilkan bacaan di profil' },
+  { key: 'xp', label: 'Mengumpulkan XP dan masuk papan peringkat' }
+] as const
+
+/** 403 GUEST_RESTRICTED bila akun tamu mencoba fitur yang butuh akun. */
+export function assertMember(u: Pick<AuthUser, 'guest'>, action = 'memakai fitur ini') {
+  if (u.guest) throw new AppError(403, 'GUEST_RESTRICTED', `Daftar atau masuk dulu untuk ${action}`)
+}
 /** Username hanya boleh diganti sekali per 7 hari. */
 export const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, verified_hidden AS "verifiedHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
+const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, verified_hidden AS "verifiedHidden", reading_hidden AS "readingHidden", is_guest AS "isGuest", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
 
-type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; verifiedHidden?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }
+type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; verifiedHidden?: boolean; readingHidden?: boolean; isGuest?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }
 /** Waktu bisu (epoch ms) bila masih berlaku, selain itu 0. */
 const mutedUntilMs = (v: Date | string | null | undefined, now = Date.now()): number => {
   const t = v ? new Date(v).getTime() : 0
@@ -85,6 +106,8 @@ const toUser = (r: Row, ownerEmails: string[] = []): AuthUser => {
   isOwner,
   premium: r.premium === true,
   verifiedHidden: r.verifiedHidden === true,
+  readingHidden: r.readingHidden === true,
+  guest: r.isGuest === true,
   mutedUntil: mutedUntilMs(r.mutedUntil),
   muteReason: r.muteReason ?? '',
   usernameCooldownSec: Number(r.usernameCooldownSec ?? 0),
@@ -100,6 +123,7 @@ export class AuthService {
   private readonly secret: string
   /** hash palsu untuk menyamakan waktu respons saat user tidak ditemukan (anti enumerasi username). */
   private dummyHash?: Promise<string>
+  private lastGuestPurge = 0
 
   constructor(
     private readonly pool: Pool,
@@ -126,7 +150,7 @@ export class AuthService {
 
   private issue(u: Row): AuthResult {
     this.assertNotBanned(u)
-    return { token: signToken(u.id, this.secret, this.cfg.tokenTtlSec), user: toUser(u, this.cfg.ownerEmails) }
+    return { token: signToken(u.id, this.secret, u.isGuest ? GUEST_TTL_SEC : this.cfg.tokenTtlSec), user: toUser(u, this.cfg.ownerEmails) }
   }
 
   // ------------------------------------------------------------------ password
@@ -146,6 +170,48 @@ export class AuthService {
       if (err.code === '23505') throw new ConflictError(err.constraint === 'users_email_lower' ? 'Email sudah terdaftar' : 'Username sudah dipakai')
       throw e
     }
+  }
+
+  /** Akun tamu: tanpa email/password, token 30 hari. Akun tamu yang tak pernah didaftarkan dihapus setelah 35 hari. */
+  async createGuest(): Promise<AuthResult> {
+    this.purgeGuests()
+    for (let i = 0; i < 6; i++) {
+      const username = `tamu_${randomBytes(4).toString('hex')}`
+      try {
+        const { rows } = await this.pool.query('INSERT INTO users (username, is_guest) VALUES ($1, true) RETURNING ' + COLS, [username])
+        return this.issue(rows[0])
+      } catch (e) {
+        if ((e as { code?: string }).code !== '23505') throw e
+      }
+    }
+    throw new ConflictError('Gagal membuat akun tamu, coba lagi')
+  }
+
+  private purgeGuests(now = Date.now()) {
+    if (now - this.lastGuestPurge < 3_600_000) return
+    this.lastGuestPurge = now
+    this.pool.query(`DELETE FROM users WHERE is_guest AND created_at < now() - interval '${GUEST_PURGE_DAYS} days'`).catch(e => this.log.warn({ err: String(e) }, 'purge guest gagal'))
+  }
+
+  /** Ubah akun tamu jadi akun biasa (id, XP, dan data lain tetap); token baru dikembalikan. */
+  async upgradeGuest(userId: number, username: string, email: string, password: string): Promise<AuthResult> {
+    username = String(username ?? '').trim()
+    email = String(email ?? '').trim()
+    password = String(password ?? '')
+    const bad = checkRegistration(username, email, password)
+    if (bad) throw new ValidationError(bad)
+    const hash = await hashPassword(password)
+    try {
+      const { rows } = await this.pool.query('UPDATE users SET username = $2, email = $3, password_hash = $4, is_guest = false, username_changed_at = NULL WHERE id = $1 AND is_guest RETURNING ' + COLS, [userId, username, email, hash])
+      if (rows[0]) return this.issue(rows[0])
+    } catch (e) {
+      const err = e as { code?: string; constraint?: string }
+      if (err.code === '23505') throw new ConflictError(err.constraint === 'users_email_lower' ? 'Email sudah terdaftar' : 'Username sudah dipakai')
+      throw e
+    }
+    const { rows } = await this.pool.query('SELECT ' + COLS + ' FROM users WHERE id = $1', [userId])
+    if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
+    throw new ConflictError('Akun ini sudah terdaftar')
   }
 
   async login(identifier: string, password: string): Promise<AuthResult> {
@@ -190,7 +256,9 @@ export class AuthService {
    * Ubah nama tampilan dan/atau username. Nama bebas (maks. 30 karakter, kosong = hapus).
    * Username hanya boleh diganti bila sudah lewat 7 hari sejak penggantian terakhir (dicek atomik di SQL).
    */
-  async updateProfile(userId: number, patch: { displayName?: string | null; username?: string | null; bio?: string | null; verifiedHidden?: boolean }): Promise<AuthUser> {
+  async updateProfile(userId: number, patch: { displayName?: string | null; username?: string | null; bio?: string | null; verifiedHidden?: boolean; readingHidden?: boolean }): Promise<AuthUser> {
+    const setHideRead = typeof patch.readingHidden === 'boolean'
+    const hideRead = patch.readingHidden === true
     const setHide = typeof patch.verifiedHidden === 'boolean'
     const hide = patch.verifiedHidden === true
     let setName = false
@@ -222,7 +290,7 @@ export class AuthService {
       if (!USERNAME_RE.test(username)) throw new ValidationError(USERNAME_MSG)
       setUser = true
     }
-    if (!setName && !setUser && !setBio && !setHide) throw new ValidationError('Tidak ada perubahan')
+    if (!setName && !setUser && !setBio && !setHide && !setHideRead) throw new ValidationError('Tidak ada perubahan')
 
     if (setUser) {
       const { rows } = await this.pool.query('SELECT ' + COLS + ' FROM users WHERE id = $1', [userId])
@@ -230,7 +298,7 @@ export class AuthService {
       if (!now) throw new UnauthorizedError('Akun tidak ditemukan')
       if (now.username === username) setUser = false // sama persis: tidak dihitung sebagai penggantian
       else if (Number(now.usernameCooldownSec ?? 0) > 0) throw this.cooldownError(Number(now.usernameCooldownSec))
-      if (!setName && !setUser && !setBio && !setHide) return toUser(now, this.cfg.ownerEmails)
+      if (!setName && !setUser && !setBio && !setHide && !setHideRead) return toUser(now, this.cfg.ownerEmails)
     }
 
     try {
@@ -240,10 +308,11 @@ export class AuthService {
            username = CASE WHEN $4::boolean THEN $5::text ELSE username END,
            bio = CASE WHEN $6::boolean THEN $7::text ELSE bio END,
            username_changed_at = CASE WHEN $4::boolean THEN now() ELSE username_changed_at END,
-           verified_hidden = CASE WHEN $8::boolean THEN $9::boolean ELSE verified_hidden END
+           verified_hidden = CASE WHEN $8::boolean THEN $9::boolean ELSE verified_hidden END,
+           reading_hidden = CASE WHEN $10::boolean THEN $11::boolean ELSE reading_hidden END
          WHERE id = $1 AND (NOT $4::boolean OR username_changed_at IS NULL OR username_changed_at <= now() - interval '${USERNAME_COOLDOWN_DAYS} days')
          RETURNING ` + COLS,
-        [userId, setName, name, setUser, username, setBio, bio, setHide, hide]
+        [userId, setName, name, setUser, username, setBio, bio, setHide, hide, setHideRead, hideRead]
       )
       if (rows[0]) return toUser(rows[0], this.cfg.ownerEmails)
     } catch (e) {
@@ -264,7 +333,7 @@ export class AuthService {
 
   async publicProfile(userId: number): Promise<PublicProfile> {
     const { rows } = await this.pool.query(
-      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.premium, u.verified_hidden, u.created_at AS "createdAt",
+      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.premium, u.verified_hidden, u.reading_hidden, u.created_at AS "createdAt",
               CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
               (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"
          FROM users u WHERE u.id = $1`,
@@ -287,7 +356,8 @@ export class AuthService {
       commentCount: Number(r.commentCount ?? 0),
       verified: (r.verified === true || isOwner) && r.verified_hidden !== true, // disembunyikan pemiliknya = tidak tampil publik
       isOwner,
-      premium: r.premium === true
+      premium: r.premium === true,
+      readingHidden: r.reading_hidden === true
     }
   }
 

@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { AppError } from '../core/errors.js'
-import type { AuthService, AuthUser } from '../services/auth.js'
+import { assertMember, type AuthService, type AuthUser } from '../services/auth.js'
 import type { CommentService } from '../services/comments.js'
 
 /** 403 MUTED bila akun sedang dibisukan owner. */
@@ -106,6 +106,7 @@ export const commentRoutes: FastifyPluginAsync<{ auth: AuthService; comments: Co
     },
     async (req, reply) => {
       const user = await auth.me(req.headers.authorization)
+      assertMember(user, 'memberi like')
       void reply.header('cache-control', 'no-store')
       return { data: await comments.vote(user.id, (req.params as { id: number }).id, (req.body as { value: number }).value) }
     }
@@ -119,6 +120,7 @@ export const commentRoutes: FastifyPluginAsync<{ auth: AuthService; comments: Co
     },
     async (req, reply) => {
       const user = await auth.me(req.headers.authorization)
+      assertMember(user, 'berkomentar')
       assertNotMuted(user)
       const b = req.body as { target: string; body: string; parentId?: number | null }
       const item = await comments.add(user.id, b.target, b.body, b.parentId)

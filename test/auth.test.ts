@@ -47,6 +47,21 @@ function fakes() {
         users.push(u)
         return { rows: [u] }
       }
+      if (sql.startsWith('INSERT INTO users (username, is_guest)')) {
+        if (users.some(u => u.username === p[0])) throw Object.assign(new Error('dup'), { code: '23505', constraint: 'users_username_lower' })
+        const u = { id: users.length + 1, username: p[0], email: null, password_hash: null, isGuest: true }
+        users.push(u)
+        return { rows: [u] }
+      }
+      if (sql.startsWith('UPDATE users SET username = $2, email = $3')) {
+        const [id, username, email, hash] = p
+        const u = users.find(x => x.id === id && x.isGuest)
+        if (!u) return { rows: [] }
+        if (users.some(o => o.id !== id && o.username.toLowerCase() === username.toLowerCase())) throw Object.assign(new Error('dup'), { code: '23505', constraint: 'users_username_lower' })
+        Object.assign(u, { username, email, password_hash: hash, isGuest: false })
+        return { rows: [u] }
+      }
+      if (sql.startsWith('DELETE FROM users WHERE is_guest')) return { rows: [] }
       if (sql.startsWith('UPDATE users SET\n           display_name')) {
         const [id, setName, name, setUser, username, setBio, bio] = p
         const u = users.find(x => x.id === id)
@@ -57,6 +72,7 @@ function fakes() {
         if (setName) u.displayName = name
         if (setBio) u.bio = bio
         if (setUser) { u.username = username; u.changedAt = clock.now }
+        if (p[9]) u.readingHidden = p[10]
         return { rows: [{ ...u, usernameCooldownSec: cooldown(u) }] }
       }
       if (sql.includes('FROM users u WHERE u.id = $1')) return { rows: users.filter(u => u.id === p[0]).map(u => ({ ...u, createdAt: new Date(1_700_000_000_000), commentCount: 3 })) }
@@ -160,7 +176,7 @@ test('profil publik: tanpa email/hash, memuat level & jumlah komentar; tak ada =
   const svc = new AuthService(f.pool as any, cfg, log)
   const a = await svc.register('budi', 'budi@mail.com', 'password1')
   const pub = await svc.publicProfile(a.user.id)
-  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'bio', 'commentCount', 'displayName', 'id', 'isOwner', 'joinedAt', 'level', 'premium', 'username', 'verified', 'xp'])
+  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'bio', 'commentCount', 'displayName', 'id', 'isOwner', 'joinedAt', 'level', 'premium', 'readingHidden', 'username', 'verified', 'xp'])
   assert.equal(pub.username, 'budi')
   assert.equal(pub.level, 1)
   assert.equal(pub.commentCount, 3)
@@ -180,4 +196,41 @@ test('moderasi: akun diblokir ditolak di me() & login, owner kebal; bisu hanya s
   await assert.rejects(svc.me(`Bearer ${signToken(5, 'x', 60)}`), /diblokir: spam/)
   const owner = new AuthService({ async query() { return { rows: [row('owner@x.id')] } } } as any, { ...cfg, jwtSecret: 'x', ownerEmails: ['owner@x.id'] } as any, log)
   assert.equal((await owner.me(`Bearer ${signToken(5, 'x', 60)}`)).isOwner, true)
+})
+
+test('tamu: akun tanpa email/password, tidak bisa login, dibatasi, lalu bisa didaftarkan dengan data tetap', async () => {
+  const { assertMember, GUEST_TTL_SEC } = await import('../src/services/auth.js')
+  const f = fakes()
+  const svc = new AuthService(f.pool as any, cfg, log)
+  const g = await svc.createGuest()
+  assert.equal(g.user.guest, true)
+  assert.match(g.user.username, /^tamu_[0-9a-f]{8}$/)
+  assert.equal((await svc.me(`Bearer ${g.token}`)).guest, true)
+  const claims = JSON.parse(Buffer.from(g.token.split('.')[1], 'base64url').toString())
+  assert.equal(claims.exp - claims.iat, GUEST_TTL_SEC)
+  await assert.rejects(svc.login(g.user.username, 'password1'), /salah/)
+  assert.throws(() => assertMember(g.user, 'berkomentar'), /Daftar atau masuk dulu untuk berkomentar/)
+  await svc.register('budi', 'budi@mail.com', 'password1')
+  await assert.rejects(svc.upgradeGuest(g.user.id, 'budi', 'baru@mail.com', 'password1'), /Username sudah dipakai/)
+  await assert.rejects(svc.upgradeGuest(g.user.id, 'x', 'baru@mail.com', 'password1'), /Username/)
+  const up = await svc.upgradeGuest(g.user.id, 'sari', 'sari@mail.com', 'password1')
+  assert.equal(up.user.id, g.user.id)
+  assert.equal(up.user.guest, false)
+  assert.doesNotThrow(() => assertMember(up.user, 'berkomentar'))
+  const claims2 = JSON.parse(Buffer.from(up.token.split('.')[1], 'base64url').toString())
+  assert.equal(claims2.exp - claims2.iat, cfg.tokenTtlSec)
+  assert.equal((await svc.login('sari@mail.com', 'password1')).user.id, g.user.id)
+  await assert.rejects(svc.upgradeGuest(g.user.id, 'sari2', 'sari2@mail.com', 'password1'), /sudah terdaftar/)
+})
+
+test('sembunyikan "Sedang dibaca": tersimpan di akun dan terbaca di profil publik', async () => {
+  const f = fakes()
+  const svc = new AuthService(f.pool as any, cfg, log)
+  const a = await svc.register('budi', 'budi@mail.com', 'password1')
+  assert.equal(a.user.readingHidden, false)
+  assert.equal((await svc.updateProfile(a.user.id, { readingHidden: true })).readingHidden, true)
+  assert.equal((await svc.publicProfile(a.user.id)).readingHidden, false)
+  f.users[0].reading_hidden = true
+  assert.equal((await svc.publicProfile(a.user.id)).readingHidden, true)
+  assert.equal((await svc.updateProfile(a.user.id, { readingHidden: false })).readingHidden, false)
 })

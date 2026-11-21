@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { MAX_AVATAR_BYTES, isJpeg } from '../core/comments.js'
 import { NotFoundError, ValidationError } from '../core/errors.js'
-import type { AuthService } from '../services/auth.js'
+import { GUEST_LIMITS, assertMember, type AuthService } from '../services/auth.js'
 
 const noStore = { 'cache-control': 'no-store' }
 const str = (max: number) => ({ type: 'string', maxLength: max }) as const
@@ -12,7 +12,7 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
 
   app.get('/auth/config', { schema: { tags: ['auth'], summary: 'Metode login yang aktif (untuk tampilan app)' } }, async (_req, reply) => {
     reply200(reply)
-    return { data: { google: auth.googleClientId } }
+    return { data: { google: auth.googleClientId, guest: { enabled: true, limits: GUEST_LIMITS } } }
   })
 
   app.post(
@@ -36,6 +36,26 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
   )
 
   app.post(
+    '/auth/guest',
+    { schema: { tags: ['auth'], summary: 'Masuk sebagai tamu (tanpa daftar; fitur sosial & sinkronisasi dibatasi, lihat /auth/config)' }, config: { rateLimit: { max: 5, timeWindow: '1 hour' } } },
+    async (_req, reply) => {
+      reply200(reply)
+      return { data: await auth.createGuest() }
+    }
+  )
+
+  app.post(
+    '/auth/guest/upgrade',
+    { schema: { tags: ['auth'], summary: 'Daftarkan akun tamu (id & data tetap, token baru) — wajib token tamu', body: { type: 'object', required: ['username', 'email', 'password'], properties: { username: str(40), email: str(300), password: str(200) } } }, config: limit(5) },
+    async (req, reply) => {
+      const user = await auth.me(req.headers.authorization)
+      const b = req.body as { username: string; email: string; password: string }
+      reply200(reply)
+      return { data: await auth.upgradeGuest(user.id, b.username, b.email, b.password) }
+    }
+  )
+
+  app.post(
     '/auth/google',
     { schema: { tags: ['auth'], summary: 'Masuk dengan Google (ID token dari app)', body: { type: 'object', required: ['idToken'], properties: { idToken: str(4096) } } }, config: limit(10) },
     async (req, reply) => {
@@ -49,6 +69,7 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
 
   app.put('/auth/me/avatar', { schema: { tags: ['auth'], summary: 'Ganti foto profil (body = image/jpeg, maks. 300 KB)' }, config: limit(10) }, async (req, reply) => {
     const user = await auth.me(req.headers.authorization)
+    assertMember(user, 'mengganti foto profil')
     const body = req.body
     if (!isJpeg(body)) throw new ValidationError('Foto harus berformat JPEG')
     if (body.length > MAX_AVATAR_BYTES) throw new ValidationError('Foto terlalu besar (maks. 300 KB)')
@@ -58,6 +79,7 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
 
   app.delete('/auth/me/avatar', { schema: { tags: ['auth'], summary: 'Hapus foto profil' }, config: limit(10) }, async (req, reply) => {
     const user = await auth.me(req.headers.authorization)
+    assertMember(user, 'mengubah foto profil')
     reply200(reply)
     return { data: await auth.clearAvatar(user.id) }
   })
@@ -88,14 +110,15 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     {
       schema: {
         tags: ['auth'],
-        summary: 'Ubah nama tampilan, bio, dan/atau username (username: cooldown 7 hari)',
-        body: { type: 'object', properties: { displayName: { type: ['string', 'null'], maxLength: 200 }, username: { type: ['string', 'null'], maxLength: 60 }, bio: { type: ['string', 'null'], maxLength: 600 }, verifiedHidden: { type: 'boolean' } } }
+        summary: 'Ubah nama tampilan, bio, username (cooldown 7 hari), dan pengaturan privasi (verifiedHidden, readingHidden)',
+        body: { type: 'object', properties: { displayName: { type: ['string', 'null'], maxLength: 200 }, username: { type: ['string', 'null'], maxLength: 60 }, bio: { type: ['string', 'null'], maxLength: 600 }, verifiedHidden: { type: 'boolean' }, readingHidden: { type: 'boolean' } } }
       },
       config: limit(10)
     },
     async (req, reply) => {
       const user = await auth.me(req.headers.authorization)
-      const b = (req.body ?? {}) as { displayName?: string | null; username?: string | null; bio?: string | null; verifiedHidden?: boolean }
+      assertMember(user, 'mengubah profil')
+      const b = (req.body ?? {}) as { displayName?: string | null; username?: string | null; bio?: string | null; verifiedHidden?: boolean; readingHidden?: boolean }
       reply200(reply)
       return { data: await auth.updateProfile(user.id, b) }
     }
