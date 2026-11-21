@@ -47,8 +47,8 @@ Catatan: cold start sedikit lebih lambat (koneksi DB/Redis). Untuk performa terb
 | `GET /providers` | status provider, circuit breaker, header gambar |
 | `GET /health` | cek PostgreSQL & Redis |
 
-**Id unified** = `<provider>:<id asli>`: `shinigami:<uuid>`, `manta:123`, `lumos:<slug>`.
-Id chapter: `shinigami:<chapterId>`, `manta:<seri>:<episode>`, `lumos:<slug>:<chapter-slug>` — ambil dari `chapters[].id`.
+**Id unified** = `<provider>:<id asli>`: `shinigami:<uuid>`, `manta:123`, `lumos:<slug>`, `komiku:<slug>`.
+Id chapter: `shinigami:<chapterId>`, `manta:<seri>:<episode>`, `lumos:<slug>:<chapter-slug>`, `komiku:<slug>:<chapter-slug>` — ambil dari `chapters[].id`.
 Sukses: `{ data, meta }`. Error: `{ error: { code, message } }`.
 Unduh gambar dengan header dari `imageHeaders` (referer wajib untuk provider tertentu).
 
@@ -118,6 +118,11 @@ sehingga genre Lumos ikut lengkap. Sortir & filter akhir dikerjakan SQL agar kon
 
 ## Shinigami (domain baru)
 Situs `https://s1.shinigami.mx`, API `https://api.shinigami.io/v1`. Keduanya bisa diganti lewat env `SHINIGAMI_BASE_URL` dan `SHINIGAMI_API_URL`. `latest` memakai `is_update=true` (+ `format` bila `type` diisi); entri "Shinigami News" disaring.
+
+## Komiku
+Situs `https://komiku.org` (bisa diganti lewat env `KOMIKU_BASE_URL`). Adapter tanpa cheerio (regex, seperti Lumos). Id seri = slug (`komiku:sakamoto-days`),
+id chapter = `komiku:<slug seri>:<slug chapter>` (mis. `komiku:sakamoto-days:sakamoto-days-chapter-279`). `latest` = `/pustaka/?orderby=modified` (+ `tipe`),
+`search` = `/?post_type=manga&s=`, dan `browse` per genre memakai endpoint `api.komiku.org/genre/<slug>/?page=N` (env `KOMIKU_API_URL`; slug unified dipetakan lewat `/p/daftar-genre/`), tanpa genre memakai `/pustaka/`. Ranking/trending/views Komiku belum dipakai (API ini tak punya konsep itu). Tanggal chapter dinormalkan bila formatnya `dd/mm/yyyy`, ISO, atau relatif ("3 hari lalu"); selain itu `null`.
 
 ## Catatan jujur
 - Scraper asli tidak punya fungsi *popular* dan *genre*, dan saya tidak mengarang endpoint upstream. Maka:

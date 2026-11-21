@@ -1,6 +1,7 @@
 /** Adapter diuji dengan fetch ter-mock; bentuk payload mengikuti field yang dibaca scraper asli. */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { createKomiku, parseDate } from '../src/providers/komiku.js'
 import { createLumos } from '../src/providers/lumos.js'
 import { createManta } from '../src/providers/manta.js'
 import { createShinigami } from '../src/providers/shinigami.js'
@@ -296,5 +297,109 @@ describe('lumos (ketahanan: mirror lambat/diblokir)', () => {
     try {
       await assert.rejects(createLumos().detail('tidak-ada'), (e: any) => e.status === 404)
     } finally { m.restore() }
+  })
+})
+
+describe('komiku', () => {
+  const card = (slug: string, flag = 'jp') => `<article class="ls2"><div class="ls2v"><a href="/manga/${slug}/"><img class="lazy" data-src="https://img.test/${slug}.jpg" src="data:image/gif;base64,AAA"><img class="flag" src="/flag-${flag}.png"></a></div><div class="ls2j"><h3><a href="/manga/${slug}/" title="Baca Manga ${slug} Title">${slug}</a></h3><span class="ls2t">Action · 3 jam lalu</span><a class="ls2l" href="/${slug}-chapter-12/">Chapter 12</a></div></article>`
+  const listHtml = `<html>${card('a-one')}${card('b-two', 'kr')}</html>`
+  const detailHtml = `<html><div id="Judul"><h1>Komik <span itemprop="name">Sakamoto Days</span></h1><span class="j2">Alt</span></div>
+    <div id="Informasi"><div class="ims"><img itemprop="image" src="https://img.test/c.jpg"></div>
+    <table class="inftable"><tr><td>Jenis Komik:</td><td>Manga</td></tr><tr><td>Pengarang:</td><td>Suzuki</td></tr><tr><td>Status:</td><td>Berjalan</td></tr>
+    <tr><td>Genre:</td><td><ul class="genre"><li><a href="/genre/action/">Action</a></li><li><a href="/genre/comedy/">Comedy</a></li></ul></td></tr></table></div>
+    <p class="desc" itemprop="description">Sinopsis   di sini</p>
+    <div id="Daftar_Chapter"><meta itemprop="numberOfItems" content="2"><table id="daftarChapter">
+    <tr itemprop="itemListElement"><td class="judulseries"><a itemprop="url" href="/sakamoto-days-chapter-2/"><span itemprop="name">Chapter 2</span></a></td><td class="tanggalseries">21/11/2025</td></tr>
+    <tr itemprop="itemListElement"><td class="judulseries"><a itemprop="url" href="/sakamoto-days-chapter-1-5/"><span itemprop="name">Chapter 1.5</span></a></td><td class="tanggalseries">tidak jelas</td></tr>
+    </table></div></html>`
+  const chapterHtml = `<html><script>var chapterData = {"id":1,"idseries":2,"series":"Sakamoto Days","chapter":"2","jumlahgambar":2,"hasNext":true};</script>
+    <div class="toolbar"><a aria-label="Prev" href="/sakamoto-days-chapter-1-5/">P</a><a aria-label="Next" href="/sakamoto-days-chapter-3/">N</a></div>
+    <div id="Baca_Komik"><img class="ww" id="2" data-src="https://img.test/2.jpg"><img class="ww" id="1" data-src="https://img.test/1.jpg"><img class="other" data-src="x"></div></html>`
+
+  it('latest/search -> format unified (type dari bendera, genre, cover lazy)', async () => {
+    const m = mockFetch({ '/pustaka/': () => ({ text: listHtml }), 'post_type=manga': () => ({ text: listHtml }) })
+    try {
+      const a = createKomiku()
+      const items = await a.latest({ page: 2, limit: 1, type: 'manhwa' })
+      assert.equal(items.length, 1)
+      assert.ok(m.calls[0].includes('/pustaka/page/2/') && m.calls[0].includes('tipe=manhwa'))
+      const [x, y] = await a.search('x', { page: 1, limit: 10 })
+      assert.equal(x.id, 'komiku:a-one')
+      assert.equal(x.title, 'a-one Title')
+      assert.equal(x.type, 'manga')
+      assert.equal(y.type, 'manhwa')
+      assert.deepEqual(x.genres, ['Action'])
+      assert.equal(x.cover, 'https://img.test/a-one.jpg')
+      assert.equal(x.latestChapter, '12')
+      assert.equal(x.url, 'https://komiku.org/manga/a-one/')
+    } finally { m.restore() }
+  })
+
+  it('browse genre -> api.komiku.org/genre/<slug>/ (kartu ls4) + listGenres dari daftar-genre', async () => {
+    const ls4 = `<article class="ls4"><div class="ls4v"><a href="https://komiku.org/manga/g-one/"><img data-src="https://img.test/g.jpg"></a></div><div class="ls4j"><h4><a href="/manga/g-one/" title="Baca Komik G One">G One</a></h4><a class="ls24" href="/g-one-chapter-9/">Chapter 9</a><span class="ls4s">Aksi · 10 views</span></div></article>`
+    const gnr = `<a class="gnr" data-nama="slice-of-life" href="/genre/slice-of-life/"><b>Slice of Life</b><i>1.200</i></a><a class="gnr" data-nama="action" href="/genre/action/"><b>Action</b><i>9</i></a>`
+    const m = mockFetch({ '/p/daftar-genre/': () => ({ text: gnr }), 'api.komiku.org/genre/slice-of-life/': () => ({ text: ls4 }), '/pustaka/': () => ({ text: listHtml }) })
+    try {
+      const a = createKomiku()
+      assert.deepEqual(await a.listGenres!(), ['Slice of Life', 'Action'])
+      const r = await a.browse!({ page: 2, sort: 'latest', genre: 'slice-of-life' })
+      assert.equal(r[0].id, 'komiku:g-one')
+      assert.equal(r[0].title, 'G One')
+      assert.deepEqual(r[0].genres, ['Slice of Life'])
+      assert.equal(r[0].latestChapter, '9')
+      assert.ok(m.calls.some(u => u.includes('/genre/slice-of-life/?page=2')))
+      assert.deepEqual(await a.browse!({ page: 1, sort: 'latest', genre: 'tidak-ada' }), [])
+      assert.equal((await a.browse!({ page: 1, sort: 'latest' })).length, 2)
+    } finally { m.restore() }
+  })
+
+  it('detail: info, genre, chapter terurut terbaru dulu + id <slug>:<chapterSlug>', async () => {
+    const m = mockFetch({ '/manga/sakamoto-days/': () => ({ text: detailHtml }) })
+    try {
+      const d = await createKomiku().detail('sakamoto-days')
+      assert.equal(d.title, 'Sakamoto Days')
+      assert.equal(d.type, 'manga')
+      assert.equal(d.status, 'ongoing')
+      assert.equal(d.author, 'Suzuki')
+      assert.deepEqual(d.genres, ['Action', 'Comedy'])
+      assert.equal(d.synopsis, 'Sinopsis di sini')
+      assert.equal(d.cover, 'https://img.test/c.jpg')
+      assert.deepEqual(d.chapters.map(c => c.number), ['2', '1.5'])
+      assert.equal(d.chapters[0].id, 'komiku:sakamoto-days:sakamoto-days-chapter-2')
+      assert.equal(d.chapters[0].date, '2025-11-21T00:00:00.000Z')
+      assert.equal(d.chapters[1].date, null)
+      assert.equal(d.latestChapter, '2')
+    } finally { m.restore() }
+  })
+
+  it('chapter: gambar urut, prev/next, nomor dari chapterData', async () => {
+    const m = mockFetch({ '/sakamoto-days-chapter-2/': () => ({ text: chapterHtml }) })
+    try {
+      const ch = await createKomiku().chapter('sakamoto-days:sakamoto-days-chapter-2')
+      assert.deepEqual(ch.images, ['https://img.test/1.jpg', 'https://img.test/2.jpg'])
+      assert.equal(ch.number, '2')
+      assert.equal(ch.seriesId, 'komiku:sakamoto-days')
+      assert.equal(ch.prev, 'komiku:sakamoto-days:sakamoto-days-chapter-1-5')
+      assert.equal(ch.next, 'komiku:sakamoto-days:sakamoto-days-chapter-3')
+      assert.equal(ch.imageHeaders.referer, 'https://komiku.org/')
+    } finally { m.restore() }
+  })
+
+  it('404 -> NotFoundError; halaman list di luar batas -> kosong', async () => {
+    const m = mockFetch({ '/manga/x/': () => ({ status: 404 }), '/pustaka/': () => ({ status: 404 }) })
+    try {
+      const a = createKomiku()
+      await assert.rejects(a.detail('x'), { code: 'NOT_FOUND' })
+      assert.deepEqual(await a.latest({ page: 99, limit: 20 }), [])
+    } finally { m.restore() }
+  })
+
+  it('parseDate: dd/mm/yyyy, ISO, relatif, sampah', () => {
+    const now = Date.UTC(2026, 10, 21, 12)
+    assert.equal(parseDate('31/12/2024'), '2024-12-31T00:00:00.000Z')
+    assert.equal(parseDate('2024-01-05'), '2024-01-05T00:00:00.000Z')
+    assert.equal(parseDate('2 hari lalu', now), '2026-11-19T12:00:00.000Z')
+    assert.equal(parseDate('32/13/2024'), null)
+    assert.equal(parseDate('abc'), null)
   })
 })
