@@ -6,6 +6,8 @@ const app = await createApp(config).catch(e => {
   process.exit(1)
 })
 
+process.on('unhandledRejection', reason => app.log.error({ err: reason }, 'unhandled rejection'))
+
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.once(sig, () => {
     app.log.info({ sig }, 'shutting down')

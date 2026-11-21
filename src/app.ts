@@ -5,7 +5,7 @@ import Fastify from 'fastify'
 import { Redis } from 'ioredis'
 import type { Config } from './config.js'
 import { Cache } from './core/cache.js'
-import { AppError } from './core/errors.js'
+import { AppError, dbErrorStatus } from './core/errors.js'
 import { migrate } from './db/migrate.js'
 import { createPool } from './db/pool.js'
 import { PgStore } from './db/store.js'
@@ -144,7 +144,13 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
       code = status === 429 ? 'RATE_LIMITED' : 'BAD_REQUEST'
       message = err.message
     } else {
-      req.log.error({ err }, 'unhandled error')
+      const db = dbErrorStatus(err)
+      if (db) {
+        ;({ status, code, message } = db)
+        req.log.warn({ err: err?.message, pg: err?.code }, 'database error')
+      } else {
+        req.log.error({ err }, 'unhandled error')
+      }
     }
     void reply.code(status).send({ error: { code, message } })
   })

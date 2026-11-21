@@ -59,3 +59,23 @@ export class NotConfiguredError extends AppError {
     super(501, 'NOT_CONFIGURED', message)
   }
 }
+
+/**
+ * Error dari driver PostgreSQL / koneksi -> status HTTP yang tepat (bukan 500 polos).
+ *  - 22xxx (angka di luar rentang, format salah, terlalu panjang) = input pengguna yang buruk -> 400
+ *  - 23505 / 23503 (bentrok unik / relasi hilang) -> 409
+ *  - timeout query, koneksi habis/putus, DB restart -> 503 (sementara, aman diulang)
+ * null = bukan error database (tetap diperlakukan sebagai 500).
+ */
+export function dbErrorStatus(e: unknown): { status: number; code: string; message: string } | null {
+  const err = e as { code?: unknown; message?: unknown } | null
+  const c = typeof err?.code === 'string' ? err.code : ''
+  const msg = typeof err?.message === 'string' ? err.message : ''
+  if (/^22/.test(c)) return { status: 400, code: 'BAD_REQUEST', message: 'Parameter tidak valid' }
+  if (c === '23505' || c === '23503') return { status: 409, code: 'CONFLICT', message: 'Data bentrok atau tidak ditemukan' }
+  const busy =
+    c === '57014' || c === '53300' || c === '57P01' || c === '57P02' || c === '57P03' || /^08/.test(c) ||
+    ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT'].includes(c) ||
+    /timeout exceeded when trying to connect|connection terminated|too many clients|canceling statement due to statement timeout/i.test(msg)
+  return busy ? { status: 503, code: 'DB_UNAVAILABLE', message: 'Server sedang sibuk, coba lagi sebentar' } : null
+}

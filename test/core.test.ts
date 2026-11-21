@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 import { CircuitBreaker } from '../src/core/breaker.js'
 import { Cache } from '../src/core/cache.js'
 import { ViewCounter } from '../src/services/views.js'
-import { ValidationError } from '../src/core/errors.js'
+import { ValidationError, dbErrorStatus } from '../src/core/errors.js'
 import { parseId } from '../src/core/ids.js'
 import { isoDate, memo, normTitle, slugify, splitOnce, withDeadline } from '../src/core/util.js'
 import { MemoryKV, noopLog } from './helpers.js'
@@ -139,5 +139,28 @@ describe('ViewCounter', () => {
     await v.flush()
     assert.equal(sent.length, 1)
     assert.deepEqual(sent[0].map(r => `${r.provider}:${r.ref}:${r.n}`).sort(), ['lumos:x:1', 'manta:1:3'])
+  })
+})
+
+describe('dbErrorStatus (error DB -> status HTTP)', () => {
+  it('input buruk (22xxx) -> 400, bukan 500', () => {
+    assert.equal(dbErrorStatus({ code: '22003', message: 'value out of range for type integer' })?.status, 400)
+    assert.equal(dbErrorStatus({ code: '22P02' })?.status, 400)
+  })
+  it('bentrok / relasi -> 409', () => {
+    assert.equal(dbErrorStatus({ code: '23505' })?.status, 409)
+    assert.equal(dbErrorStatus({ code: '23503' })?.status, 409)
+  })
+  it('timeout query, koneksi habis/putus -> 503', () => {
+    assert.equal(dbErrorStatus({ code: '57014' })?.status, 503)
+    assert.equal(dbErrorStatus({ code: '53300' })?.status, 503)
+    assert.equal(dbErrorStatus({ code: 'ECONNREFUSED' })?.status, 503)
+    assert.equal(dbErrorStatus(new Error('timeout exceeded when trying to connect'))?.status, 503)
+    assert.equal(dbErrorStatus(new Error('Connection terminated unexpectedly'))?.status, 503)
+  })
+  it('bug biasa (mis. NOT NULL, TypeError) tetap 500', () => {
+    assert.equal(dbErrorStatus({ code: '23502' }), null)
+    assert.equal(dbErrorStatus(new TypeError('x is undefined')), null)
+    assert.equal(dbErrorStatus(null), null)
   })
 })

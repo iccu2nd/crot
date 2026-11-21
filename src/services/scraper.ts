@@ -344,7 +344,7 @@ export class ScraperService {
 
   /** Rekomendasi = rating tertinggi dari data tersimpan. */
   recommended(o: PageQuery): Promise<ListResult> {
-    return this.dbList(`r:${o.provider ?? ''}:${o.page}:${o.limit}`, o, () => this.o.store.recommended(dbPage(o)))
+    return this.dbList(`r2:${o.provider ?? ''}:${o.page}:${o.limit}`, o, () => this.o.store.recommended(dbPage(o)))
   }
 
   async genres(): Promise<{ data: GenreRow[]; source: DataSource }> {

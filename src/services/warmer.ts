@@ -41,13 +41,13 @@ export class Warmer {
 
   private schedule(ms: number) {
     if (this.stopped) return
-    this.timer = setTimeout(() => void this.run().finally(() => this.schedule(this.cfg.intervalMs)), ms)
+    this.timer = setTimeout(() => void this.run().catch(e => this.log.warn({ err: (e as Error)?.message }, 'warm run failed')).finally(() => this.schedule(this.cfg.intervalMs)), ms)
     this.timer.unref()
   }
 
   private scheduleCrawl(ms: number) {
     if (this.stopped || !this.cfg.crawl) return
-    this.crawlTimer = setTimeout(() => void this.crawl().finally(() => this.scheduleCrawl(this.cfg.crawl!.everyMs)), ms)
+    this.crawlTimer = setTimeout(() => void this.crawl().catch(e => this.log.warn({ err: (e as Error)?.message }, 'crawl failed')).finally(() => this.scheduleCrawl(this.cfg.crawl!.everyMs)), ms)
     this.crawlTimer.unref()
   }
 

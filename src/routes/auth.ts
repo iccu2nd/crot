@@ -37,7 +37,7 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
 
   app.post(
     '/auth/guest',
-    { schema: { tags: ['auth'], summary: 'Masuk sebagai tamu (tanpa daftar; fitur sosial & sinkronisasi dibatasi, lihat /auth/config)' }, config: { rateLimit: { max: 5, timeWindow: '1 hour' } } },
+    { schema: { tags: ['auth'], summary: 'Masuk sebagai tamu (tanpa daftar; fitur sosial & sinkronisasi dibatasi, lihat /auth/config)' }, config: { rateLimit: { max: 30, timeWindow: '1 hour' } } },
     async (_req, reply) => {
       reply200(reply)
       return { data: await auth.createGuest() }

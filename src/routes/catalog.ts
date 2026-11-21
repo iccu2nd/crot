@@ -91,7 +91,7 @@ export const catalogRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async 
         response: R.list
       }
     },
-    async (req, reply) => reply.headers(publicCache(300)).send(await svc.recommended(req.query))
+    async (req, reply) => reply.headers(publicCache(60)).send(await svc.recommended(req.query))
   )
 
   const genreList = envelope(

@@ -396,7 +396,8 @@ export class AuthService {
     const res = await this.http(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(String(idToken ?? ''))}`, { signal: AbortSignal.timeout(8000) }).catch(() => null)
     if (!res) throw new AppError(502, 'UPSTREAM_ERROR', 'Tidak bisa menghubungi Google')
     if (!res.ok) throw new UnauthorizedError('Token Google tidak valid')
-    const t = (await res.json()) as Record<string, string>
+    const t = (await res.json().catch(() => null)) as Record<string, string> | null
+    if (!t) throw new UnauthorizedError('Token Google tidak valid')
     const issuerOk = t.iss === 'accounts.google.com' || t.iss === 'https://accounts.google.com'
     if (t.aud !== clientId || !issuerOk || Number(t.exp) * 1000 < Date.now() || String(t.email_verified) !== 'true' || !t.sub || !t.email) {
       throw new UnauthorizedError('Token Google tidak valid')

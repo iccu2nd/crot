@@ -351,13 +351,17 @@ export class PgStore implements Store {
     )
   }
 
-  /** Rekomendasi = rating tertinggi (hanya seri yang punya rating), lalu yang terbaru. Tidak bergantung pada hit, jadi isinya beda dari Populer. */
+  /**
+   * Rekomendasi = rating tertinggi dulu, lalu seri dengan chapter terbanyak, lalu yang terbaru.
+   * Rating BUKAN syarat: Shinigami & Manta tidak punya rating di list-nya (null), jadi dulu hasilnya kosong.
+   * Seri tanpa cover diurutkan paling belakang (bukan dibuang, supaya hasil tidak kosong).
+   */
   recommended(p: DbPage) {
     return this.list(
       {
-        where: `WHERE s.rating IS NOT NULL AND s.rating > 0${p.provider ? ' AND s.provider = $1' : ''}`,
+        where: p.provider ? 'WHERE s.provider = $1' : '',
         params: p.provider ? [p.provider] : [],
-        order: 'x.rating DESC NULLS LAST, x.last_seen_at DESC, x.id'
+        order: "(x.cover = '') ASC, x.rating DESC NULLS LAST, x.chapter_count DESC NULLS LAST, x.last_seen_at DESC, x.id"
       },
       p
     )
