@@ -54,7 +54,7 @@ export class Warmer {
   /**
    * Isi DB dalam-dalam supaya filter genre berisi banyak seri dari semua sumber:
    *  - tiap provider: halaman latest 1..N (berhenti saat kosong) -> semua seri + genre dari list tersimpan
-   *  - seed pencarian per nama genre (Manta tidak punya halaman/genre native) -> seri ber-tag genre itu
+   *  - seed pencarian per nama genre (provider tanpa halaman genre native) -> seri ber-tag genre itu
    *  - Lumos: browse native per genre dasar, beberapa halaman
    *  - perkaya detail seri yang belum punya genre (Shinigami/Lumos list tanpa genre)
    * Pelan & berurutan (jeda antar request) supaya upstream tidak terbebani.

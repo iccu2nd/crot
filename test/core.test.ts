@@ -10,8 +10,8 @@ import { MemoryKV, noopLog } from './helpers.js'
 
 describe('ids & util', () => {
   it('parseId', () => {
-    assert.deepEqual(parseId('manta:12:34'), { provider: 'manta', ref: '12:34' })
-    for (const bad of ['x:1', 'manta:', ':1', 'manta', 'manta:a/b']) assert.throws(() => parseId(bad), ValidationError)
+    assert.deepEqual(parseId('lumos:12:34'), { provider: 'lumos', ref: '12:34' })
+    for (const bad of ['x:1', 'lumos:', ':1', 'lumos', 'lumos:a/b']) assert.throws(() => parseId(bad), ValidationError)
   })
   it('normTitle & slugify', () => {
     assert.equal(normTitle('Solo-Leveling!'), normTitle('solo leveling'))
@@ -132,13 +132,13 @@ describe('ViewCounter', () => {
     const sent: { provider: string; ref: string; n: number }[][] = []
     let fail = true
     const v = new ViewCounter({ addViews: async rows => { if (fail) throw new Error('db down'); sent.push(rows as any) } }, noopLog)
-    v.hit('manta', '1'); v.hit('manta', '1'); v.hit('lumos', 'x')
+    v.hit('shinigami', '1'); v.hit('shinigami', '1'); v.hit('lumos', 'x')
     await v.flush()
-    v.hit('manta', '1')
+    v.hit('shinigami', '1')
     fail = false
     await v.flush()
     assert.equal(sent.length, 1)
-    assert.deepEqual(sent[0].map(r => `${r.provider}:${r.ref}:${r.n}`).sort(), ['lumos:x:1', 'manta:1:3'])
+    assert.deepEqual(sent[0].map(r => `${r.provider}:${r.ref}:${r.n}`).sort(), ['lumos:x:1', 'shinigami:1:3'])
   })
 })
 

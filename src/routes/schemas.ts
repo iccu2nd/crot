@@ -119,7 +119,7 @@ export const Q = {
       page,
       limit,
       provider,
-      type: { type: 'string', enum: ['comic', 'manga', 'novel'], description: 'Manta memfilter di upstream; provider lain difilter dari tipe tiap seri (item tanpa tipe ikut tersaring)' }
+      type: { type: 'string', enum: ['comic', 'manga', 'novel'], description: 'Difilter dari tipe tiap seri (item tanpa tipe ikut tersaring)' }
     }
   },
   popular: {

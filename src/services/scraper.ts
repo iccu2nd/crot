@@ -31,7 +31,7 @@ export interface ListMeta {
   providers: Record<string, ProviderStatus>
   degraded: boolean
   source: DataSource
-  /** Pesan singkat provider yang gagal (untuk diagnosa), mis. `komiku: HTTP 403 [server: cloudflare]`. */
+  /** Pesan singkat provider yang gagal (untuk diagnosa), mis. `lumos: HTTP 403 [server: cloudflare]`. */
   errors?: Record<string, string>
 }
 export interface ListResult {
@@ -65,9 +65,6 @@ function statusOf(e: unknown): ProviderStatus {
   if (e instanceof UnavailableError) return 'unavailable'
   return 'error'
 }
-
-/** Provider yang memfilter `type` di sisi upstream (bagian home Manta). Provider lain difilter dari `item.type`. */
-const NATIVE_TYPE_FILTER: ReadonlySet<ProviderKey> = new Set<ProviderKey>(['manta'])
 
 /** Sisakan item bertipe `type` (mis. "manga"); tanpa `type` semua lolos. */
 export function filterByType(items: SeriesSummary[], type?: string): SeriesSummary[] {
@@ -320,7 +317,6 @@ export class ScraperService {
     return this.fanOut(
       o,
       async p => {
-        if (NATIVE_TYPE_FILTER.has(p.key)) return this.listFrom(p, 'latest', o)
         // `type` tidak dikirim ke upstream (cache key tetap satu per halaman), difilter setelahnya.
         const r = await this.listFrom(p, 'latest', { ...o, type: undefined })
         return { ...r, value: filterByType(r.value, o.type) }

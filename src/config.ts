@@ -27,7 +27,7 @@ export const config = {
   },
   pgPoolMax: serverless ? 2 : 10,
   autoMigrate: !serverless,
-  providers: [...PROVIDER_KEYS].sort((a, b) => ['shinigami', 'manta', 'lumos', 'komiku'].indexOf(a) - ['shinigami', 'manta', 'lumos', 'komiku'].indexOf(b)),
+  providers: [...PROVIDER_KEYS],
   /** Per IP. Operator seluler memakai CGNAT (banyak pengguna satu IP), dan Home saja memicu ±25 request, jadi 120 mudah kena 429. */
   rateLimitMax: 300,
   /** Batas total menunggu satu provider saat fan-out. Lebih ketat = respons lebih cepat saat upstream lambat. */

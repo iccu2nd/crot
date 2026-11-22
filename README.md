@@ -1,6 +1,6 @@
 # Unified Scraper API
 
-Satu REST API (Node.js + TypeScript + Fastify) untuk tiga provider: **Shinigami**, **Manta**, **Lumos**.
+Satu REST API (Node.js + TypeScript + Fastify) untuk dua provider: **Shinigami** dan **Lumos**.
 Format data seragam, fallback otomatis antar provider, cache Redis (stale-while-revalidate), PostgreSQL sebagai data utama.
 
 ## Jalankan
@@ -14,7 +14,7 @@ Migration otomatis saat start, atau manual `npm run migrate`. Env wajib hanya `D
 **Verifikasi scraper ke situs asli (wajib dijalankan sekali di jaringan Anda):**
 ```bash
 npm run smoke            # semua provider
-npm run smoke manta      # satu provider
+npm run smoke lumos      # satu provider
 ```
 Alur: latest → search → detail → chapter, lengkap dengan waktu & jumlah data; exit code 1 jika ada yang gagal.
 
@@ -35,7 +35,7 @@ Catatan: cold start sedikit lebih lambat (koneksi DB/Redis). Untuk performa terb
 | Endpoint | Fungsi |
 |---|---|
 | `GET /search?q=&page=&limit=&provider=` | cari di semua provider |
-| `GET /latest?page=&limit=&provider=&type=` | update terbaru (`type` = comic/manga/novel; Manta memfilter di upstream, provider lain difilter dari tipe tiap seri) |
+| `GET /latest?page=&limit=&provider=&type=` | update terbaru (`type` = comic/manga/novel; difilter dari tipe tiap seri) |
 | `GET /popular?days=7&page=&limit=` | populer (lihat catatan) |
 | `GET /recommended?page=&limit=&provider=` | rekomendasi: rating tertinggi (hanya seri berating), lalu terbaru |
 | `GET /genres` | daftar genre (DB + genre native Lumos) |
@@ -47,8 +47,8 @@ Catatan: cold start sedikit lebih lambat (koneksi DB/Redis). Untuk performa terb
 | `GET /providers` | status provider, circuit breaker, header gambar |
 | `GET /health` | cek PostgreSQL & Redis |
 
-**Id unified** = `<provider>:<id asli>`: `shinigami:<uuid>`, `manta:123`, `lumos:<slug>`, `komiku:<slug>`.
-Id chapter: `shinigami:<chapterId>`, `manta:<seri>:<episode>`, `lumos:<slug>:<chapter-slug>`, `komiku:<slug>:<chapter-slug>` — ambil dari `chapters[].id`.
+**Id unified** = `<provider>:<id asli>`: `shinigami:<uuid>`, `lumos:<slug>`.
+Id chapter: `shinigami:<chapterId>`, `lumos:<slug>:<chapter-slug>` — ambil dari `chapters[].id`.
 Sukses: `{ data, meta }`. Error: `{ error: { code, message } }`.
 Unduh gambar dengan header dari `imageHeaders` (referer wajib untuk provider tertentu).
 
@@ -119,15 +119,10 @@ sehingga genre Lumos ikut lengkap. Sortir & filter akhir dikerjakan SQL agar kon
 ## Shinigami (domain baru)
 Situs `https://s1.shinigami.mx`, API `https://api.shinigami.io/v1`. Keduanya bisa diganti lewat env `SHINIGAMI_BASE_URL` dan `SHINIGAMI_API_URL`. `latest` memakai `is_update=true` (+ `format` bila `type` diisi); entri "Shinigami News" disaring.
 
-## Komiku
-Situs `https://komiku.org` (bisa diganti lewat env `KOMIKU_BASE_URL`). Adapter tanpa cheerio (regex, seperti Lumos). Id seri = slug (`komiku:sakamoto-days`),
-id chapter = `komiku:<slug seri>:<slug chapter>` (mis. `komiku:sakamoto-days:sakamoto-days-chapter-279`). `latest` = `/pustaka/?orderby=modified` (+ `tipe`),
-`search` = `/?post_type=manga&s=`, dan `browse` per genre memakai endpoint `api.komiku.org/genre/<slug>/?page=N` (env `KOMIKU_API_URL`; slug unified dipetakan lewat `/p/daftar-genre/`), tanpa genre memakai `/pustaka/`. Ranking/trending/views Komiku belum dipakai (API ini tak punya konsep itu). Tanggal chapter dinormalkan bila formatnya `dd/mm/yyyy`, ISO, atau relatif ("3 hari lalu"); selain itu `null`.
-
 ## Catatan jujur
 - Scraper asli tidak punya fungsi *popular* dan *genre*, dan saya tidak mengarang endpoint upstream. Maka:
   **popular** = seri paling banyak dibuka lewat API ini (hit detail) dalam N hari; **genre** = dibangun dari genre seri yang pernah dilihat
-  (list Shinigami/Manta memuat genre; Lumos diisi saat genre dibuka lewat `/browse` live, atau dari halaman detail oleh warmer). Keduanya makin lengkap seiring pemakaian.
+  (list Shinigami memuat genre; Lumos diisi saat genre dibuka lewat `/browse` live, atau dari halaman detail oleh warmer). Keduanya makin lengkap seiring pemakaian.
 - `limit` berlaku per provider; Lumos `latest` memakai ukuran halaman upstream.
 - `date` chapter dinormalkan ke ISO-8601; Lumos tidak menyediakan tanggal.
 

@@ -34,15 +34,14 @@ describe('PgStore', { skip }, () => {
     assert.deepEqual(await migrate(pool), [], 'migration idempoten')
     await store.syncProviders([
       { key: 'shinigami', name: 'Shinigami', baseUrl: 'x' },
-      { key: 'manta', name: 'Manta', baseUrl: 'x' },
       { key: 'lumos', name: 'Lumos', baseUrl: 'x' }
     ])
   })
   after(() => pool.end())
 
   const a = summary('shinigami', 'uuid-1', 'Solo Leveling', ['Action', 'Fantasy'], { latestChapter: '200' })
-  const b = summary('manta', '77', 'Solo-Leveling!', ['Action'])
-  const c = summary('lumos', 'slug-x', 'Another Title', [])
+  const b = summary('lumos', '77', 'Solo-Leveling!', ['Action'])
+  const c = summary('shinigami', 'slug-x', 'Another Title', [])
 
   it('saveSummaries: upsert batch, dedupe & genre link', async () => {
     await store.saveSummaries([a, b, c, a])
@@ -52,20 +51,20 @@ describe('PgStore', { skip }, () => {
     assert.equal(hit.cover, 'c.jpg')
     assert.equal(hit.latestChapter, '200')
     assert.deepEqual(hit.genres, ['Action', 'Fantasy'])
-    assert.deepEqual(hit.sources.map(s => s.id), ['shinigami:uuid-1', 'manta:77'])
+    assert.deepEqual(hit.sources.map(s => s.id), ['shinigami:uuid-1', 'lumos:77'])
   })
 
   it('siblings & findSeries memakai norm_title', async () => {
-    const f = await store.findSeries('manta', '77')
+    const f = await store.findSeries('lumos', '77')
     assert.equal(f?.normTitle, 'sololeveling')
-    assert.deepEqual(await store.siblings('sololeveling', 'manta'), [{ provider: 'shinigami', ref: 'uuid-1' }])
+    assert.deepEqual(await store.siblings('sololeveling', 'lumos'), [{ provider: 'shinigami', ref: 'uuid-1' }])
   })
 
   it('saveDetail: chapters, ganti genre, idempoten', async () => {
     await store.saveDetail(detail({ ...b, genres: ['Action', 'Drama'] }, ['2', '1', '1.5']))
     await store.saveDetail(detail({ ...b, genres: ['Drama'] }, ['2', '1', '1.5']))
-    assert.deepEqual(await store.findChapter('manta', '77:ch1.5'), { seriesRef: '77', number: '1.5' })
-    assert.equal(await store.findChapter('manta', 'nope'), null)
+    assert.deepEqual(await store.findChapter('lumos', '77:ch1.5'), { seriesRef: '77', number: '1.5' })
+    assert.equal(await store.findChapter('lumos', 'nope'), null)
     const rows = await store.byGenre('drama', { limit: 10, offset: 0 })
     assert.equal(rows.length, 1)
     const { rows: n } = await pool.query("SELECT count(*)::int AS n FROM chapters")
@@ -78,13 +77,13 @@ describe('PgStore', { skip }, () => {
     const action = await store.byGenre('action', { limit: 10, offset: 0 })
     assert.equal(action.length, 1)
     assert.equal(action[0].provider, 'shinigami')
-    assert.equal((await store.byGenre('action', { limit: 10, offset: 0, provider: 'manta' })).length, 0)
+    assert.equal((await store.byGenre('action', { limit: 10, offset: 0, provider: 'lumos' })).length, 0)
   })
 
   it('byGenre: sortir (az/rating/popular) & filter format/status', async () => {
     await store.saveSummaries([
-      summary('manta', 'z1', 'Zeta', ['Action'], { type: 'manga', rating: 3, status: 'completed' }),
-      summary('manta', 'a1', 'Alpha', ['Action'], { type: 'manhua', rating: 4.5 })
+      summary('lumos', 'z1', 'Zeta', ['Action'], { type: 'manga', rating: 3, status: 'completed' }),
+      summary('lumos', 'a1', 'Alpha', ['Action'], { type: 'manhua', rating: 4.5 })
     ])
     const q = { limit: 10, offset: 0 }
     assert.deepEqual((await store.byGenre('action', { ...q, sort: 'az' })).map(x => x.title), ['Alpha', 'Solo Leveling', 'Zeta'])
@@ -97,12 +96,12 @@ describe('PgStore', { skip }, () => {
   it('latestLocal, needingDetail', async () => {
     const latest = await store.latestLocal({ limit: 10, offset: 0 })
     assert.equal(latest.length, 4)
-    assert.deepEqual(await store.needingDetail(5), [{ provider: 'lumos', ref: 'slug-x' }])
+    assert.deepEqual(await store.needingDetail(5), [{ provider: 'shinigami', ref: 'slug-x' }])
   })
 
   it('popular: skor view, lalu fallback rating/terbaru', async () => {
-    await store.addViews([{ provider: 'lumos', ref: 'slug-x', n: 3 }, { provider: 'manta', ref: '77', n: 1 }])
-    await store.addViews([{ provider: 'lumos', ref: 'slug-x', n: 2 }, { provider: 'lumos', ref: 'unknown', n: 9 }])
+    await store.addViews([{ provider: 'shinigami', ref: 'slug-x', n: 3 }, { provider: 'lumos', ref: '77', n: 1 }])
+    await store.addViews([{ provider: 'shinigami', ref: 'slug-x', n: 2 }, { provider: 'shinigami', ref: 'unknown', n: 9 }])
     const pop = await store.popular({ limit: 10, offset: 0, days: 7 })
     assert.deepEqual(pop.map(p => p.title), ['Another Title', 'Solo Leveling'])
     assert.equal((await store.popular({ limit: 1, offset: 1, days: 7 })).length, 1)

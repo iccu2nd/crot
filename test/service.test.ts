@@ -57,26 +57,26 @@ const q = { page: 1, limit: 10 }
 
 describe('ScraperService list', () => {
   it('menggabungkan provider & dedupe judul sama (sources terkumpul)', async () => {
-    const { svc } = make([adapter('shinigami').a, adapter('manta', { titles: ['Solo-Leveling', 'Other'] }).a])
+    const { svc } = make([adapter('shinigami').a, adapter('lumos', { titles: ['Solo-Leveling', 'Other'] }).a])
     const r = await svc.search('solo', q)
     assert.deepEqual(r.data.map(d => d.title), ['Solo Leveling', 'Other'])
-    assert.deepEqual(r.data[0].sources.map(s => s.id), ['shinigami:0', 'manta:0'])
+    assert.deepEqual(r.data[0].sources.map(s => s.id), ['shinigami:0', 'lumos:0'])
     assert.equal(r.meta.degraded, false)
     assert.equal(r.meta.source, 'upstream')
     assert.equal((await svc.search('solo', q)).meta.source, 'cache')
   })
 
   it('satu provider gagal -> hasil provider lain, degraded', async () => {
-    const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('manta').a])
+    const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('lumos').a])
     const r = await svc.latest(q)
     assert.equal(r.data.length, 1)
     assert.equal(r.meta.degraded, true)
-    assert.deepEqual(r.meta.providers, { shinigami: 'error', manta: 'ok' })
+    assert.deepEqual(r.meta.providers, { shinigami: 'error', lumos: 'ok' })
   })
 
   it('semua gagal -> data dari DB; DB kosong -> 502', async () => {
-    const down = () => [adapter('shinigami', { fail: true }).a, adapter('manta', { fail: true }).a]
-    const withDb = make(down(), fakeStore({ searchLocal: async () => [item('manta', '1', 'Dari DB')] }))
+    const down = () => [adapter('shinigami', { fail: true }).a, adapter('lumos', { fail: true }).a]
+    const withDb = make(down(), fakeStore({ searchLocal: async () => [item('lumos', '1', 'Dari DB')] }))
     const r = await withDb.svc.search('x', q)
     assert.equal(r.meta.source, 'db')
     assert.equal(r.data[0].title, 'Dari DB')
@@ -85,7 +85,7 @@ describe('ScraperService list', () => {
 
   it('circuit breaker terbuka setelah 5 kegagalan -> provider dilewati cepat', async () => {
     const bad = adapter('shinigami', { fail: true })
-    const { svc } = make([bad.a, adapter('manta').a])
+    const { svc } = make([bad.a, adapter('lumos').a])
     for (let i = 1; i <= 6; i++) await svc.search(`q${i}`, q)
     assert.equal(bad.state.calls, 5)
     assert.equal(svc.providers()[0].circuit, 'open')
@@ -93,10 +93,10 @@ describe('ScraperService list', () => {
   })
 
   it('provider= membatasi ke satu provider', async () => {
-    const m = adapter('manta')
+    const m = adapter('lumos')
     const { svc } = make([adapter('shinigami').a, m.a])
-    const r = await svc.latest({ ...q, provider: 'manta' })
-    assert.deepEqual(Object.keys(r.meta.providers), ['manta'])
+    const r = await svc.latest({ ...q, provider: 'lumos' })
+    assert.deepEqual(Object.keys(r.meta.providers), ['lumos'])
   })
 })
 
@@ -104,85 +104,85 @@ describe('ScraperService detail/chapter fallback', () => {
   it('detail: provider asal gagal -> sibling dari DB', async () => {
     const store = fakeStore({
       findSeries: async () => ({ title: 'Solo Leveling', normTitle: 'sololeveling' }),
-      siblings: async () => [{ provider: 'manta', ref: '77' }]
+      siblings: async () => [{ provider: 'lumos', ref: '77' }]
     })
-    const { svc, hits } = make([adapter('shinigami', { fail: true }).a, adapter('manta').a], store)
+    const { svc, hits } = make([adapter('shinigami', { fail: true }).a, adapter('lumos').a], store)
     const r = await svc.detail('shinigami:abc')
     assert.equal(r.meta.fallback, true)
-    assert.equal(r.meta.provider, 'manta')
+    assert.equal(r.meta.provider, 'lumos')
     assert.equal(r.meta.requestedId, 'shinigami:abc')
-    assert.equal(r.data.id, 'manta:77')
-    assert.deepEqual(hits, ['manta:77'])
+    assert.equal(r.data.id, 'lumos:77')
+    assert.deepEqual(hits, ['lumos:77'])
   })
 
   it('detail: tanpa sibling di DB -> cari via search provider lain', async () => {
     const store = fakeStore({ findSeries: async () => ({ title: 'Solo Leveling', normTitle: 'sololeveling' }) })
-    const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('manta', { titles: ['solo leveling'] }).a], store)
+    const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('lumos', { titles: ['solo leveling'] }).a], store)
     const r = await svc.detail('shinigami:abc')
     assert.equal(r.meta.fallback, true)
-    assert.equal(r.data.id, 'manta:0')
+    assert.equal(r.data.id, 'lumos:0')
   })
 
   it('detail: gagal & tidak ada pengganti -> error asli; id tidak valid -> 400', async () => {
-    const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('manta').a])
+    const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('lumos').a])
     await assert.rejects(svc.detail('shinigami:abc'), { code: 'UPSTREAM_ERROR' })
     await assert.rejects(svc.detail('nonsense'), { code: 'BAD_REQUEST' })
-    await assert.rejects(svc.detail('lumos:abc'), { code: 'BAD_REQUEST' }) // provider tidak aktif
+    await assert.rejects(make([adapter('shinigami').a]).svc.detail('lumos:abc'), { code: 'BAD_REQUEST' }) // provider tidak aktif
   })
 
   it('detail: data stale dipakai saat upstream gagal', async () => {
-    const a = adapter('manta')
+    const a = adapter('lumos')
     const short = { ...cfg, ttl: { ...cfg.ttl, detail: { fresh: 5, stale: 5000 } } }
     const svc = new ScraperService({ adapters: [a.a], cache: new Cache(new MemoryKV(), noopLog), store: fakeStore(), views: { hit() {} }, log: noopLog, cfg: short })
-    await svc.detail('manta:1')
+    await svc.detail('lumos:1')
     await new Promise(r => setTimeout(r, 15))
     a.state.fail = true
-    const r = await svc.detail('manta:1')
+    const r = await svc.detail('lumos:1')
     assert.equal(r.meta.source, 'stale')
-    assert.equal(r.data.id, 'manta:1')
+    assert.equal(r.data.id, 'lumos:1')
   })
 
   it('chapter: fallback mencocokkan nomor chapter di provider lain', async () => {
     const store = fakeStore({
       findChapter: async () => ({ seriesRef: 'abc', number: '2' }),
       findSeries: async () => ({ title: 'Solo Leveling', normTitle: 'sololeveling' }),
-      siblings: async () => [{ provider: 'manta', ref: '77' }]
+      siblings: async () => [{ provider: 'lumos', ref: '77' }]
     })
-    const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('manta').a], store)
+    const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('lumos').a], store)
     const r = await svc.chapter('shinigami:c2')
     assert.equal(r.meta.fallback, true)
-    assert.equal(r.data.id, 'manta:77:2')
-    assert.deepEqual(r.data.images, ['manta.jpg'])
+    assert.equal(r.data.id, 'lumos:77:2')
+    assert.deepEqual(r.data.images, ['lumos.jpg'])
   })
 
   it('chapter: tanpa jejak di DB -> error asli', async () => {
-    const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('manta').a])
+    const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('lumos').a])
     await assert.rejects(svc.chapter('shinigami:c2'), { code: 'UPSTREAM_ERROR' })
   })
 })
 
 describe('ScraperService refresh manual', () => {
   it('refresh=true melewati cache & tidak menghitung view; dibatasi 1x/menit per id', async () => {
-    const a = adapter('manta')
+    const a = adapter('lumos')
     const { svc, hits } = make([a.a])
-    await svc.detail('manta:1')
+    await svc.detail('lumos:1')
     assert.equal(a.state.calls, 1)
-    await svc.detail('manta:1')
+    await svc.detail('lumos:1')
     assert.equal(a.state.calls, 1, 'tanpa refresh dari cache')
-    const r = await svc.detail('manta:1', true)
+    const r = await svc.detail('lumos:1', true)
     assert.equal(a.state.calls, 2, 'refresh mengambil ulang dari provider')
     assert.equal(r.meta.source, 'upstream')
     assert.equal(hits.length, 2, 'refresh tidak menambah view')
-    await svc.detail('manta:1', true)
+    await svc.detail('lumos:1', true)
     assert.equal(a.state.calls, 2, 'refresh kedua dalam semenit dilayani dari cache')
-    await svc.chapter('manta:1:1')
-    await svc.chapter('manta:1:1', true)
+    await svc.chapter('lumos:1:1')
+    await svc.chapter('lumos:1:1', true)
     assert.equal(a.state.calls, 4)
   })
 })
 
 describe('ScraperService latest: filter type', () => {
-  it('Manta difilter di upstream (type dikirim), provider lain difilter dari item.type (type tidak dikirim)', async () => {
+  it('type tidak dikirim ke upstream; semua provider difilter dari item.type', async () => {
     const seen: string[] = []
     const withTypes = (p: ProviderKey, types: (string | null)[]) => {
       const { a } = adapter(p)
@@ -192,10 +192,10 @@ describe('ScraperService latest: filter type', () => {
       }
       return a
     }
-    const { svc } = make([withTypes('shinigami', ['manga', 'manhwa', null]), withTypes('manta', ['manga', 'manga'])])
+    const { svc } = make([withTypes('shinigami', ['manga', 'manhwa', null]), withTypes('lumos', ['manga', 'manga'])])
     const r = await svc.latest({ ...q, type: 'manga' })
-    assert.deepEqual(r.data.map(d => d.id).sort(), ['manta:0', 'manta:1', 'shinigami:0'])
-    assert.deepEqual(seen.sort(), ['manta:manga', 'shinigami:'])
+    assert.deepEqual(r.data.map(d => d.id).sort(), ['lumos:0', 'lumos:1', 'shinigami:0'])
+    assert.deepEqual(seen.sort(), ['lumos:', 'shinigami:'])
   })
 
   it('tanpa type: semua item lolos', async () => {
@@ -232,12 +232,12 @@ describe('ScraperService: list grace', () => {
   const conf = { ...cfg, aggregateTimeoutMs: 2000, listGraceMs: 30 }
 
   it('provider lambat tidak menahan respons; request berikutnya sudah lengkap dari cache', async () => {
-    const { svc } = make([adapter('shinigami', { titles: ['Cepat'] }).a, slow('manta', 250, ['Lambat'])], fakeStore(), conf)
+    const { svc } = make([adapter('shinigami', { titles: ['Cepat'] }).a, slow('lumos', 250, ['Lambat'])], fakeStore(), conf)
     const t0 = Date.now()
     const r1 = await svc.latest(q)
     assert.ok(Date.now() - t0 < 200, 'tidak menunggu provider lambat')
     assert.deepEqual(r1.data.map(d => d.title), ['Cepat'])
-    assert.deepEqual(r1.meta.providers, { shinigami: 'ok', manta: 'timeout' })
+    assert.deepEqual(r1.meta.providers, { shinigami: 'ok', lumos: 'timeout' })
     assert.equal(r1.meta.degraded, true)
     await wait(300)
     const r2 = await svc.latest(q)
@@ -248,16 +248,16 @@ describe('ScraperService: list grace', () => {
   it('provider cepat yang hasilnya kosong tidak memotong provider lain', async () => {
     const empty = adapter('shinigami').a
     empty.latest = async () => []
-    const { svc } = make([empty, slow('manta', 100, ['Ada'])], fakeStore(), conf)
+    const { svc } = make([empty, slow('lumos', 100, ['Ada'])], fakeStore(), conf)
     const r = await svc.latest(q)
     assert.deepEqual(r.data.map(d => d.title), ['Ada'])
   })
 })
 
 describe('ScraperService: detail dari PostgreSQL saat cache kosong', () => {
-  const stored = detailOf('manta', '1', 'Tersimpan', ['3', '2', '1'])
+  const stored = detailOf('lumos', '1', 'Tersimpan', ['3', '2', '1'])
   const slowDetail = () => {
-    const m = adapter('manta', { titles: ['Terbaru'] })
+    const m = adapter('lumos', { titles: ['Terbaru'] })
     const base = m.a.detail
     m.a.detail = async ref => (await wait(120), base(ref))
     return m
@@ -267,28 +267,28 @@ describe('ScraperService: detail dari PostgreSQL saat cache kosong', () => {
     const m = slowDetail()
     const { svc, hits } = make([m.a], fakeStore({ detailLocal: async () => stored }))
     const t0 = Date.now()
-    const r1 = await svc.detail('manta:1')
+    const r1 = await svc.detail('lumos:1')
     assert.ok(Date.now() - t0 < 100, 'tidak menunggu upstream')
     assert.equal(r1.meta.source, 'db')
     assert.equal(r1.data.title, 'Tersimpan')
-    assert.deepEqual(hits, ['manta:1'])
+    assert.deepEqual(hits, ['lumos:1'])
     await wait(200)
-    const r2 = await svc.detail('manta:1')
+    const r2 = await svc.detail('lumos:1')
     assert.equal(r2.meta.source, 'cache')
     assert.equal(r2.data.title, 'Terbaru')
   })
 
   it('upstream gagal + ada data DB -> tetap tampil; tanpa data DB -> error', async () => {
-    const m = adapter('manta', { fail: true })
-    assert.equal((await make([m.a], fakeStore({ detailLocal: async () => stored })).svc.detail('manta:1')).meta.source, 'db')
-    await assert.rejects(make([adapter('manta', { fail: true }).a]).svc.detail('manta:1'), { code: 'UPSTREAM_ERROR' })
+    const m = adapter('lumos', { fail: true })
+    assert.equal((await make([m.a], fakeStore({ detailLocal: async () => stored })).svc.detail('lumos:1')).meta.source, 'db')
+    await assert.rejects(make([adapter('lumos', { fail: true }).a]).svc.detail('lumos:1'), { code: 'UPSTREAM_ERROR' })
   })
 
   it('DB bermasalah -> diabaikan, lanjut ke upstream; serverless tidak memakai fallback', async () => {
     const broken = fakeStore({ detailLocal: async () => { throw new Error('db down') } })
-    assert.equal((await make([adapter('manta').a], broken).svc.detail('manta:1')).meta.source, 'upstream')
-    const m = adapter('manta', { titles: ['Terbaru'] })
-    const r = await make([m.a], fakeStore({ detailLocal: async () => stored }), { ...cfg, serverless: true }).svc.detail('manta:1')
+    assert.equal((await make([adapter('lumos').a], broken).svc.detail('lumos:1')).meta.source, 'upstream')
+    const m = adapter('lumos', { titles: ['Terbaru'] })
+    const r = await make([m.a], fakeStore({ detailLocal: async () => stored }), { ...cfg, serverless: true }).svc.detail('lumos:1')
     assert.equal(r.meta.source, 'upstream')
     assert.equal(r.data.title, 'Terbaru')
   })
@@ -297,11 +297,11 @@ describe('ScraperService: detail dari PostgreSQL saat cache kosong', () => {
 describe('ScraperService: prefetch chapter berikutnya', () => {
   const reader = (flag?: boolean) => {
     const asked: string[] = []
-    const m = adapter('manta')
+    const m = adapter('lumos')
     m.a.chapter = async ref => {
       asked.push(ref)
       const n = Number(ref.split(':')[1])
-      return { id: `manta:${ref}`, seriesId: null, number: String(n), images: ['x.jpg'], prev: null, next: n < 3 ? `manta:s:${n + 1}` : null, imageHeaders: {} }
+      return { id: `lumos:${ref}`, seriesId: null, number: String(n), images: ['x.jpg'], prev: null, next: n < 3 ? `lumos:s:${n + 1}` : null, imageHeaders: {} }
     }
     const conf = flag === undefined ? cfg : { ...cfg, prefetchNextChapter: flag }
     return { asked, svc: make([m.a], fakeStore(), conf).svc }
@@ -309,20 +309,20 @@ describe('ScraperService: prefetch chapter berikutnya', () => {
 
   it('membuka chapter 1 -> chapter 2 diambil di background -> dibuka berikutnya dari cache', async () => {
     const { asked, svc } = reader()
-    await svc.chapter('manta:s:1')
+    await svc.chapter('lumos:s:1')
     await wait(30)
     assert.deepEqual(asked, ['s:1', 's:2'])
-    const r = await svc.chapter('manta:s:2')
+    const r = await svc.chapter('lumos:s:2')
     assert.equal(r.meta.source, 'cache')
   })
 
   it('bisa dimatikan lewat config; chapter terakhir tidak memicu apa-apa', async () => {
     const off = reader(false)
-    await off.svc.chapter('manta:s:1')
+    await off.svc.chapter('lumos:s:1')
     await wait(30)
     assert.deepEqual(off.asked, ['s:1'])
     const last = reader()
-    await last.svc.chapter('manta:s:3')
+    await last.svc.chapter('lumos:s:3')
     await wait(30)
     assert.deepEqual(last.asked, ['s:3'])
   })

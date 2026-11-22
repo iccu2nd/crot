@@ -353,7 +353,7 @@ export class PgStore implements Store {
 
   /**
    * Rekomendasi = rating tertinggi dulu, lalu seri dengan chapter terbanyak, lalu yang terbaru.
-   * Rating BUKAN syarat: Shinigami & Manta tidak punya rating di list-nya (null), jadi dulu hasilnya kosong.
+   * Rating BUKAN syarat: Shinigami tidak punya rating di list-nya (null), jadi dulu hasilnya kosong.
    * Seri tanpa cover diurutkan paling belakang (bukan dibuang, supaya hasil tidak kosong).
    */
   recommended(p: DbPage) {

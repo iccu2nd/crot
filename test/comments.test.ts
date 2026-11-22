@@ -7,7 +7,7 @@ import { XpService } from '../src/services/xp.js'
 
 test('target komentar: seri & chapter valid, lainnya ditolak', () => {
   assert.equal(checkTarget('s:lumos:abc-123'), 's:lumos:abc-123')
-  assert.equal(checkTarget('c:manta:12:345'), 'c:manta:12:345')
+  assert.equal(checkTarget('c:lumos:12:345'), 'c:lumos:12:345')
   for (const bad of ['', 'x:lumos:a', 's:lumos', 's:lumos:a b', 's:lumos:' + 'a'.repeat(400), undefined, 5]) assert.throws(() => checkTarget(bad), /tidak valid/)
 })
 

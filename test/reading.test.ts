@@ -13,7 +13,7 @@ test('reading.report: validasi id, satu provider, nomor wajib, jumlah dibatasi',
   await svc.report(7, { seriesId: 'lumos:seri-1', chapterId: 'lumos:bab-12', chapterNumber: ' 12 ', chaptersRead: 5, title: ' Judul\u0000  Komik ' })
   assert.deepEqual(f.calls[0].p, [7, 'lumos:seri-1', 'Judul Komik', 'lumos:bab-12', '12', 5])
   assert.deepEqual(f.calls[1].p, [7, MAX_READING]) // pangkas ke 200 seri terbaru
-  await assert.rejects(() => svc.report(7, { seriesId: 'lumos:a', chapterId: 'manta:b', chapterNumber: '1' }), /tidak cocok/)
+  await assert.rejects(() => svc.report(7, { seriesId: 'lumos:a', chapterId: 'shinigami:b', chapterNumber: '1' }), /tidak cocok/)
   await assert.rejects(() => svc.report(7, { seriesId: 'bukan-id', chapterId: 'lumos:b', chapterNumber: '1' }))
   await assert.rejects(() => svc.report(7, { seriesId: 'lumos:a', chapterId: 'lumos:b', chapterNumber: '  ' }), /Nomor chapter/)
   await svc.report(7, { seriesId: 'lumos:a', chapterId: 'lumos:b', chapterNumber: '1', chaptersRead: 99999999 })
