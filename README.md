@@ -61,4 +61,4 @@ Aktif bila `ADMIN_TOKEN` diisi (tidak tampil di `/docs`, 10 request/menit): peng
 - **Fallback:** list memanggil semua provider paralel dan hanya menunggu provider lambat `listGraceMs`; detail/chapter yang gagal dicari di provider lain (judul ternormalisasi, chapter dicocokkan lewat nomor). Circuit breaker per provider (5 gagal → buka 30 dtk). Tanpa Redis, detail dilayani dari PostgreSQL.
 - **Warmer** (server biasa): mengisi cache/DB berkala, crawl katalog genre, prefetch chapter berikutnya.
 - **Database:** `migrations/*.sql` transaksional dengan advisory lock; pool 10 (Vercel 2), `statement_timeout` 8 dtk. Jangan ubah nama/isi migration yang sudah dijalankan.
-- **Shinigami:** domain dapat diganti lewat `SHINIGAMI_BASE_URL` / `SHINIGAMI_API_URL`.
+- **Shinigami:** domain situs & API ditulis langsung di `src/providers/shinigami.ts` (`BASE`, `API`).

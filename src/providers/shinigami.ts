@@ -3,9 +3,9 @@ import { cid, compact, isoDate, numOrNull, request, retry, sid } from '../core/u
 import type { ChapterContent, ProviderAdapter, SeriesDetail, SeriesStatus, SeriesSummary } from '../core/types.js'
 
 const KEY = 'shinigami'
-// Situs & API pindah ke domain baru (s1.shinigami.mx / api.shinigami.io). Bisa diganti lewat env bila pindah lagi tanpa ubah kode.
-const BASE = (process.env.SHINIGAMI_BASE_URL || 'https://s1.shinigami.mx').replace(/\/+$/, '')
-const API = (process.env.SHINIGAMI_API_URL || 'https://api.shinigami.io').replace(/\/+$/, '')
+// Domain situs & API Shinigami (ubah di sini bila pindah lagi).
+const BASE = 'https://s1.shinigami.mx'
+const API = 'https://api.shinigami.io'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
 const HEADERS = { 'user-agent': UA, origin: BASE, referer: `${BASE}/`, accept: 'application/json' }
 // Entri pengumuman milik situs, bukan komik.
