@@ -443,7 +443,13 @@ export class ScraperService {
   }
 
   private chapterFrom(p: ProviderAdapter, ref: string, force = false) {
-    return this.o.cache.getOrSet<ChapterContent>(`c:${p.key}:${ref}`, this.o.cfg.ttl.chapter, () => this.call(p, () => p.chapter(ref)), undefined, force)
+    return this.o.cache.getOrSet<ChapterContent>(
+      `c:${p.key}:${ref}`,
+      this.o.cfg.ttl.chapter,
+      () => this.call(p, () => p.chapter(ref)),
+      this.o.cfg.serverless ? undefined : () => this.o.store.chapterLocal(p.key, ref),
+      force
+    )
   }
 
   /** Ambil chapter berikutnya di background supaya "lanjut baca" langsung dari cache. Kegagalan diabaikan. */
@@ -523,6 +529,8 @@ export class ScraperService {
     } catch (e) {
       failure = e
     }
+    const saved = await this.o.store.chapterLocal(provider, ref).catch(() => null)
+    if (saved) return { data: saved, meta: { provider, requestedId: id, fallback: false, source: 'db' } }
     // Fallback: cari chapter bernomor sama pada seri yang sama di provider lain.
     const known = await this.o.store.findChapter(provider, ref).catch(() => null)
     if (known) {
@@ -538,6 +546,79 @@ export class ScraperService {
       }
     }
     throw failure
+  }
+
+  /** Cek gambar benar-benar bisa diunduh (status OK + content-type gambar). Mengembalikan jumlah gambar yang gagal. */
+  private async probeImages(images: string[], headers: Record<string, string>): Promise<number> {
+    let bad = 0
+    let next = 0
+    const one = async (url: string): Promise<boolean> => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await fetch(url, { headers: { ...headers, range: 'bytes=0-2047' }, signal: AbortSignal.timeout(12_000), redirect: 'follow' })
+          const type = (res.headers.get('content-type') ?? '').toLowerCase()
+          const body = await res.arrayBuffer()
+          if ((res.status === 200 || res.status === 206) && body.byteLength > 0 && (type.startsWith('image/') || type === 'application/octet-stream')) return true
+        } catch {}
+      }
+      return false
+    }
+    const worker = async () => {
+      while (next < images.length) {
+        const url = images[next++]!
+        if (!/^https?:\/\//i.test(url) || !(await one(url))) bad++
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(6, images.length) }, worker))
+    return bad
+  }
+
+  /**
+   * Perbaikan admin: ambil ulang chapter dari upstream (lewati cache), uji semua gambarnya. Kalau semua bisa dimuat -> simpan ke
+   * DB + cache (TTL panjang). Kalau gagal -> coba chapter bernomor sama di provider lain dan simpan atas id chapter ini.
+   */
+  async fixChapter(
+    provider: ProviderKey,
+    ref: string,
+    seriesRef: string,
+    number: string
+  ): Promise<{ status: 'ok' | 'broken'; source: ProviderKey | null; images: number; bad: number; reason?: string }> {
+    const primary = this.adapter(provider)
+    const key = `c:${provider}:${ref}`
+    const ttl = { fresh: 30 * 24 * 3600_000, stale: this.o.cfg.ttl.chapter.stale }
+    const attempt = async (a: ProviderAdapter, r: string) => {
+      const c = await this.call(a, () => a.chapter(r))
+      if (!c.images.length) return { c, bad: 0, n: 0, reason: 'tidak ada gambar' }
+      const headers = { ...a.imageHeaders(), ...(c.imageHeaders ?? {}) }
+      const bad = await this.probeImages(c.images, headers)
+      return { c: { ...c, imageHeaders: headers }, bad, n: c.images.length, reason: bad ? `${bad}/${c.images.length} gambar gagal dimuat` : undefined }
+    }
+    let last = { n: 0, bad: 0, reason: 'chapter tidak bisa diambil' }
+    try {
+      const r = await attempt(primary, ref)
+      last = { n: r.n, bad: r.bad, reason: r.reason ?? '' }
+      if (!r.reason) {
+        await this.o.store.saveChapterImages(provider, ref, r.c, provider)
+        await this.o.cache.put(key, r.c, ttl)
+        return { status: 'ok', source: provider, images: r.n, bad: 0 }
+      }
+    } catch (e) {
+      last.reason = normalizeError(e).message
+    }
+    for (const sib of await this.siblingsOf(provider, seriesRef)) {
+      try {
+        const a = this.adapter(sib.provider)
+        const series = await withDeadline(this.detailFrom(a, sib.ref), this.o.cfg.primaryTimeoutMs)
+        const match = series.value.chapters.find(c => sameNumber(c.number, number))
+        if (!match) continue
+        const r = await attempt(a, parseId(match.id).ref)
+        if (r.reason) continue
+        await this.o.store.saveChapterImages(provider, ref, r.c, sib.provider)
+        await this.o.cache.put(key, r.c, ttl)
+        return { status: 'ok', source: sib.provider, images: r.n, bad: 0 }
+      } catch {}
+    }
+    return { status: 'broken', source: null, images: last.n, bad: last.bad, reason: last.reason }
   }
 }
 

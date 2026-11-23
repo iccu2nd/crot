@@ -111,6 +111,9 @@ export interface Store {
   findSeries(provider: ProviderKey, ref: string): Promise<{ title: string; normTitle: string } | null>
   siblings(normTitle: string, exclude: ProviderKey): Promise<{ provider: ProviderKey; ref: string }[]>
   findChapter(provider: ProviderKey, ref: string): Promise<{ seriesRef: string; number: string } | null>
+  /** Gambar chapter yang sudah terverifikasi bisa dimuat (hasil perbaikan admin). */
+  chapterLocal(provider: ProviderKey, ref: string): Promise<ChapterContent | null>
+  saveChapterImages(provider: ProviderKey, ref: string, c: ChapterContent, source: ProviderKey): Promise<void>
   searchLocal(q: string, p: DbPage): Promise<SeriesSummary[]>
   latestLocal(p: DbPage): Promise<SeriesSummary[]>
   popular(p: DbPage & { days: number }): Promise<SeriesSummary[]>

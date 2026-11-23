@@ -65,6 +65,10 @@ export class Cache {
     return { value: await this.refresh(key, ttl, load), state: 'miss' }
   }
 
+  async put<T>(key: string, v: T, ttl: Ttl): Promise<void> {
+    await this.write(key, v, ttl)
+  }
+
   private refresh<T>(key: string, ttl: Ttl, load: () => Promise<T>): Promise<T> {
     const running = this.inflight.get(key) as Promise<T> | undefined
     if (running) return running

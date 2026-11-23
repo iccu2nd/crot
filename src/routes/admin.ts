@@ -3,6 +3,7 @@ import type { AuthService } from '../services/auth.js'
 import type { PgStore } from '../db/store.js'
 import type { AnnouncementRepo } from '../services/announcements.js'
 import { NotFoundError, ValidationError } from '../core/errors.js'
+import type { ScraperService } from '../services/scraper.js'
 import { tokenMatches } from './announcements.js'
 
 /** Panel admin: hanya akun owner (email di OWNER_EMAILS). Kontrol penuh data komik & user. */
@@ -10,9 +11,10 @@ export const adminRoutes: FastifyPluginAsync<{
   auth: AuthService
   store: PgStore
   announcements: AnnouncementRepo
+  svc: ScraperService
   adminToken?: string
   ownerEmails?: string[]
-}> = async (app, { auth, store, announcements, adminToken = '', ownerEmails = [] }) => {
+}> = async (app, { auth, store, announcements, svc, adminToken = '', ownerEmails = [] }) => {
   const guard = async (req: { headers: { authorization?: string } }) => {
     await auth.requireOwner(req.headers.authorization)
   }
@@ -184,6 +186,20 @@ export const adminRoutes: FastifyPluginAsync<{
     async req => {
       if (!(await store.adminDeleteChapter(req.params.id))) throw new NotFoundError('Chapter tidak ditemukan')
       return { data: { deleted: true } }
+    }
+  )
+
+  app.post<{ Params: { id: number } }>(
+    '/admin/chapters/:id/fix',
+    {
+      onRequest: guard,
+      config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+      schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } }
+    },
+    async req => {
+      const t = await store.adminChapterTarget(req.params.id)
+      if (!t) throw new NotFoundError('Chapter tidak ditemukan')
+      return { data: await svc.fixChapter(t.provider, t.ref, t.seriesRef, t.number) }
     }
   )
 

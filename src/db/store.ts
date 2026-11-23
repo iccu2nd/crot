@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg'
-import type { DbPage, GenreFilters, GenreRow, SortKey, ProviderKey, SeriesDetail, SeriesSummary, SeriesStatus, SourceRef, Store } from '../core/types.js'
+import type { ChapterContent, DbPage, GenreFilters, GenreRow, SortKey, ProviderKey, SeriesDetail, SeriesSummary, SeriesStatus, SourceRef, Store } from '../core/types.js'
 import { normTitle, slugify } from '../core/util.js'
 
 type Row = Record<string, any>
@@ -249,6 +249,32 @@ export class PgStore implements Store {
       [provider, ref]
     )
     return rows[0] ? { seriesRef: rows[0].series_ref as string, number: rows[0].number_text as string } : null
+  }
+
+  async chapterLocal(provider: ProviderKey, ref: string): Promise<ChapterContent | null> {
+    const { rows } = await this.pool.query<Row>('SELECT number, images, headers, prev, next, series_id FROM chapter_images WHERE provider = $1 AND ref = $2', [provider, ref])
+    const r = rows[0]
+    if (!r || !Array.isArray(r.images) || !r.images.length) return null
+    return { id: `${provider}:${ref}`, seriesId: (r.series_id ?? null) as string | null, number: String(r.number ?? ''), images: r.images as string[], prev: (r.prev ?? null) as string | null, next: (r.next ?? null) as string | null, imageHeaders: (r.headers ?? {}) as Record<string, string> }
+  }
+
+  async saveChapterImages(provider: ProviderKey, ref: string, c: ChapterContent, source: ProviderKey) {
+    await this.pool.query(
+      `INSERT INTO chapter_images (provider, ref, number, images, headers, prev, next, series_id, source, verified_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, now())
+       ON CONFLICT (provider, ref) DO UPDATE SET number = EXCLUDED.number, images = EXCLUDED.images, headers = EXCLUDED.headers,
+         prev = EXCLUDED.prev, next = EXCLUDED.next, series_id = EXCLUDED.series_id, source = EXCLUDED.source, verified_at = now()`,
+      [provider, ref, c.number ?? '', JSON.stringify(c.images), JSON.stringify(c.imageHeaders ?? {}), c.prev, c.next, c.seriesId, source]
+    )
+  }
+
+  async adminChapterTarget(chapterId: number) {
+    const { rows } = await this.pool.query<Row>(
+      'SELECT s.provider, s.ref AS series_ref, c.ref, c.number_text FROM chapters c JOIN series s ON s.id = c.series_id WHERE c.id = $1',
+      [chapterId]
+    )
+    const r = rows[0]
+    return r ? { provider: r.provider as ProviderKey, seriesRef: r.series_ref as string, ref: r.ref as string, number: r.number_text as string } : null
   }
 
   // ---- listing dari DB (dedupe lintas provider berdasarkan norm_title) ----
@@ -529,8 +555,10 @@ export class PgStore implements Store {
     const r = rows[0]
     if (!r) return null
     const ch = await this.pool.query<Row>(
-      `SELECT id, ref, number, number_text, title, released_at FROM chapters WHERE series_id = $1 ORDER BY number DESC NULLS LAST, id DESC`,
-      [id]
+      `SELECT c.id, c.ref, c.number, c.number_text, c.title, c.released_at,
+              EXISTS (SELECT 1 FROM chapter_images ci WHERE ci.provider = $2 AND ci.ref = c.ref) AS fixed
+         FROM chapters c WHERE c.series_id = $1 ORDER BY c.number DESC NULLS LAST, c.id DESC`,
+      [id, r.provider]
     )
     return {
       id: Number(r.id),
@@ -562,7 +590,8 @@ export class PgStore implements Store {
         number: c.number as number | null,
         numberText: c.number_text as string,
         title: (c.title ?? '') as string,
-        releasedAt: c.released_at ? new Date(c.released_at).toISOString() : null
+        releasedAt: c.released_at ? new Date(c.released_at).toISOString() : null,
+        fixed: c.fixed === true
       }))
     }
   }

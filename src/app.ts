@@ -172,7 +172,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
       await v1.register(libraryRoutes, { auth, library: new LibraryService(pool) })
       await v1.register(announcementRoutes, { repo: announcements })
       await v1.register(notificationRoutes, { auth, notifications: new NotificationService(pool) })
-      await v1.register(adminRoutes, { auth, store, announcements, adminToken: cfg.adminToken, ownerEmails: cfg.auth.ownerEmails })
+      await v1.register(adminRoutes, { auth, store, announcements, svc, adminToken: cfg.adminToken, ownerEmails: cfg.auth.ownerEmails })
     },
     { prefix: '/v1' }
   )
