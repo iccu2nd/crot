@@ -30,6 +30,31 @@ type Raw = Record<string, any>
 const decode = (s: string) => s.replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
 const text = (s: unknown) => decode(String(s ?? '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim()
 const numberFromSlug = (slug: string) => slug.replace(/^chapter-/, '').replace(/-/g, '.')
+const UNIT_MS: Record<string, number> = { detik: 1e3, second: 1e3, menit: 6e4, minute: 6e4, jam: 36e5, hour: 36e5, hari: 864e5, day: 864e5, minggu: 6048e5, week: 6048e5, bulan: 2592e6, month: 2592e6, tahun: 31536e6, year: 31536e6 }
+const REL_RE = /(\d+)?\s*(se)?\s*(detik|menit|jam|hari|minggu|bulan|tahun|second|minute|hour|day|week|month|year)s?\b[^<]{0,12}?(lalu|ago)/i
+const relativeToIso = (raw: string, now = Date.now()): string | null => {
+  try { return parseRelative(String(raw ?? ''), now) } catch { return null }
+}
+const parseRelative = (raw: string, now: number): string | null => {
+  const t = raw.toLowerCase().trim()
+  if (!t) return null
+  if (/baru saja|just now/.test(t)) return new Date(now).toISOString()
+  if (/kemarin|yesterday/.test(t)) return new Date(Math.floor((now - 864e5) / 864e5) * 864e5).toISOString()
+  const m = t.match(REL_RE)
+  if (!m) return null
+  const ms = (UNIT_MS[m[3]] ?? NaN) * (m[1] ? parseInt(m[1], 10) : 1)
+  if (!Number.isFinite(ms) || ms < 0 || ms > 31536e6 * 20) return null
+  const at = now - ms
+  return new Date(ms >= 864e5 ? Math.floor(at / 864e5) * 864e5 : at).toISOString()
+}
+const dateOf = (raw: unknown): string | null => {
+  try {
+    if (raw == null || raw === '' || typeof raw === 'object') return null
+    const d = new Date(typeof raw === 'number' && raw < 1e12 ? raw * 1000 : (raw as string | number))
+    const t = d.getTime()
+    return Number.isNaN(t) || t > Date.now() + 864e5 || t < 9e11 ? null : d.toISOString()
+  } catch { return null }
+}
 const byNumber = (a: { number: string }, b: { number: string }) => (parseFloat(b.number) || 0) - (parseFloat(a.number) || 0)
 const statusOf = (s: unknown): SeriesStatus | null => {
   const v = String(s ?? '').trim().toLowerCase()
@@ -312,12 +337,12 @@ export function createLumos(): ProviderAdapter {
     return out
   }
 
-  async function chapterListApi(slug: string, signal?: AbortSignal): Promise<{ slug: string; number: string; title: string }[]> {
+  async function chapterListApi(slug: string, signal?: AbortSignal): Promise<{ slug: string; number: string; title: string; date: string | null }[]> {
     const data = await getJson(`/api/chapters/list?comic=${encodeURIComponent(slug)}`, signal)
     return (data?.chapters ?? [])
       .map((c: Raw) => {
         const s = c.slug || `chapter-${String(c.number).replace(/\./g, '-')}`
-        return { slug: s, number: c.number != null ? String(c.number) : numberFromSlug(s), title: c.title || '' }
+        return { slug: s, number: c.number != null ? String(c.number) : numberFromSlug(s), title: c.title || '', date: dateOf(c.createdAt ?? c.created_at ?? c.publishedAt ?? c.published_at ?? c.updatedAt ?? c.date) ?? relativeToIso(String(c.timeAgo ?? c.time ?? c.ago ?? '')) }
       })
       .sort(byNumber)
   }
@@ -365,13 +390,14 @@ export function createLumos(): ProviderAdapter {
       const html = await getHtml(`/comic/${encodeURIComponent(slug)}`, signal)
       const pick = (re: RegExp) => text(html.match(re)?.[1])
 
-      const found: { slug: string; number: string; title: string }[] = []
+      const found: { slug: string; number: string; title: string; date: string | null }[] = []
       for (const m of html.matchAll(/<a[^>]+href="(\/read\/([^\/]+)\/([a-zA-Z0-9_\-]+))"[^>]+data-chapter="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)) {
         if (m[2] !== slug || found.some(c => c.slug === m[3])) continue
         found.push({
           slug: m[3],
           number: m[4].trim() || numberFromSlug(m[3]),
-          title: text(m[5].match(/<span[^>]*class="[^"]*text-heading[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1])
+          title: text(m[5].match(/<span[^>]*class="[^"]*text-heading[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1]),
+          date: relativeToIso(text(m[5].match(/<span[^>]*class="[^"]*(?:tabular-nums|text-\[11px\])[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? '')) ?? relativeToIso(text(m[5]))
         })
       }
       found.sort(byNumber)
@@ -380,7 +406,7 @@ export function createLumos(): ProviderAdapter {
         id: cid(KEY, `${slug}:${c.slug}`),
         number: c.number,
         title: c.title,
-        date: null // Lumos hanya menampilkan waktu relatif ("2 hari lalu")
+        date: c.date
       }))
 
       const genres = [...new Set([...html.matchAll(/<a[^>]+href="\/browse\?genre=([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)].map(g => text(g[2])).filter(Boolean))]
