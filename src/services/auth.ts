@@ -37,7 +37,7 @@ export interface AuthUser {
   muteReason: string
 }
 /** Profil yang boleh dilihat siapa saja (tanpa email/data akun). */
-export interface PublicProfile {
+interface PublicProfile {
   id: number
   username: string
   displayName: string
@@ -56,14 +56,14 @@ export interface PublicProfile {
   /** pemilik menyembunyikan daftar "Sedang dibaca" */
   readingHidden: boolean
 }
-export interface AuthResult {
+interface AuthResult {
   token: string
   user: AuthUser
 }
 type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: string) => void }
 
 /** Username hanya boleh diganti sekali per 7 hari. */
-export const USERNAME_COOLDOWN_DAYS = 7
+const USERNAME_COOLDOWN_DAYS = 7
 const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, verified_hidden AS "verifiedHidden", reading_hidden AS "readingHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
 
 type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; verifiedHidden?: boolean; readingHidden?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }

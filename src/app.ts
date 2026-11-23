@@ -6,31 +6,30 @@ import { Redis } from 'ioredis'
 import type { Config } from './config.js'
 import { Cache } from './core/cache.js'
 import { AppError, dbErrorStatus } from './core/errors.js'
-import { migrate } from './db/migrate.js'
-import { createPool } from './db/pool.js'
+import { createPool, migrate } from './db/pool.js'
 import { PgStore } from './db/store.js'
 import { createProviders } from './providers/index.js'
-import { announcementRoutes } from './routes/announcements.js'
-import { notificationRoutes } from './routes/notifications.js'
-import { NotificationService } from './services/notifications.js'
 import { adminRoutes } from './routes/admin.js'
+import { announcementRoutes } from './routes/announcements.js'
 import { authRoutes } from './routes/auth.js'
-import { commentRoutes } from './routes/comments.js'
-import { xpRoutes } from './routes/xp.js'
-import { readingRoutes } from './routes/reading.js'
-import { libraryRoutes } from './routes/library.js'
-import { LibraryService } from './services/library.js'
 import { catalogRoutes } from './routes/catalog.js'
+import { commentRoutes } from './routes/comments.js'
+import { libraryRoutes } from './routes/library.js'
+import { notificationRoutes } from './routes/notifications.js'
+import { readingRoutes } from './routes/reading.js'
 import { seriesRoutes } from './routes/series.js'
 import { systemRoutes } from './routes/system.js'
+import { xpRoutes } from './routes/xp.js'
 import { AnnouncementRepo } from './services/announcements.js'
 import { AuthService } from './services/auth.js'
 import { CommentService } from './services/comments.js'
-import { XpService } from './services/xp.js'
+import { LibraryService } from './services/library.js'
+import { NotificationService } from './services/notifications.js'
 import { ReadingService } from './services/reading.js'
 import { ScraperService } from './services/scraper.js'
 import { ViewCounter } from './services/views.js'
 import { Warmer } from './services/warmer.js'
+import { XpService } from './services/xp.js'
 
 /** Composition root: merangkai semua dependensi. */
 export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
@@ -127,6 +126,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   const xp = new XpService(pool, cfg.auth.ownerEmails)
   const comments = new CommentService(pool, xp, cfg.auth.ownerEmails)
   const reading = new ReadingService(pool)
+  const announcements = new AnnouncementRepo(pool)
 
   // ---- error handling ----
   app.setErrorHandler((err: any, req, reply) => {
@@ -170,9 +170,9 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
       await v1.register(xpRoutes, { auth, xp })
       await v1.register(readingRoutes, { auth, reading })
       await v1.register(libraryRoutes, { auth, library: new LibraryService(pool) })
-      await v1.register(announcementRoutes, { repo: new AnnouncementRepo(pool) })
+      await v1.register(announcementRoutes, { repo: announcements })
       await v1.register(notificationRoutes, { auth, notifications: new NotificationService(pool) })
-      await v1.register(adminRoutes, { auth, store, announcements: new AnnouncementRepo(pool), adminToken: cfg.adminToken, ownerEmails: cfg.auth.ownerEmails })
+      await v1.register(adminRoutes, { auth, store, announcements, adminToken: cfg.adminToken, ownerEmails: cfg.auth.ownerEmails })
     },
     { prefix: '/v1' }
   )

@@ -1,6 +1,6 @@
 import type { Pool } from 'pg'
 
-export interface NotificationItem {
+interface NotificationItem {
   /** unik per kejadian: `r<id balasan>` atau `l<id komentar>:<id penyuka>` */
   id: string
   kind: 'reply' | 'like'
@@ -19,7 +19,7 @@ export interface NotificationItem {
   actor: { id: number; username: string; displayName: string; avatarV: number }
 }
 
-export interface UnreadCount {
+interface UnreadCount {
   /** notif + info */
   count: number
   /** balasan + like yang belum dibaca */
@@ -30,7 +30,7 @@ export interface UnreadCount {
 
 export type ReadKind = 'all' | 'notif' | 'info'
 
-export interface NotificationPage {
+interface NotificationPage {
   /** epoch ms terakhir tab Aktivitas dibuka (balasan & like) */
   seenAt: number
   /** epoch ms terakhir tab Informasi dibuka (dipakai app untuk menandai pengumuman yang belum dibaca) */

@@ -104,7 +104,7 @@ export class XpService {
   }
 }
 
-export interface RankEntry {
+interface RankEntry {
   rank: number
   id: number
   username: string
@@ -117,7 +117,7 @@ export interface RankEntry {
   weekXp: number
 }
 
-export interface Leaderboard {
+interface Leaderboard {
   /** awal minggu (Senin 00.00 WIB), epoch ms */
   weekStart: number
   /** waktu reset berikutnya (Senin 00.00 WIB), epoch ms */

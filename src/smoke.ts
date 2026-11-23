@@ -3,7 +3,7 @@
  * Alur per provider: latest -> search -> detail -> chapter. Exit code 1 jika ada yang gagal.
  */
 import { PROVIDER_KEYS, type ProviderKey } from './core/types.js'
-import { parseId } from './core/ids.js'
+import { parseId } from './core/util.js'
 import { createProviders } from './providers/index.js'
 
 const wanted = process.argv.slice(2).filter((k): k is ProviderKey => (PROVIDER_KEYS as readonly string[]).includes(k))

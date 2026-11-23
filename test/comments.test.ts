@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { checkTarget, cleanComment, isJpeg } from '../src/core/comments.js'
+import { checkTarget, cleanComment, isJpeg } from '../src/core/util.js'
 import { CommentService } from '../src/services/comments.js'
 import { XP_RULES, levelCost, levelFor, weekWindow } from '../src/core/xp.js'
 import { XpService } from '../src/services/xp.js'

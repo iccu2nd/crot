@@ -1,6 +1,6 @@
 import type { Pool } from 'pg'
 
-export interface Announcement {
+interface Announcement {
   id: number
   title: string
   body: string
@@ -11,7 +11,7 @@ export interface Announcement {
   expiresAt: number | null
 }
 
-export interface NewAnnouncement {
+interface NewAnnouncement {
   title: string
   body?: string
   url?: string | null

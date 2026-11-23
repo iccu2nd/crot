@@ -1,9 +1,8 @@
 import type { FastifyBaseLogger } from 'fastify'
 import type { Config } from '../config.js'
-import { CircuitBreaker } from '../core/breaker.js'
+import { CircuitBreaker, isVariantTitle, normTitle, parseId, slugify, withDeadline } from '../core/util.js'
 import type { Cache, CacheState } from '../core/cache.js'
 import { NotFoundError, TimeoutError, UnavailableError, UpstreamError, ValidationError, normalizeError } from '../core/errors.js'
-import { parseId } from '../core/ids.js'
 import type {
   ChapterContent,
   ChapterSummary,
@@ -18,13 +17,12 @@ import type {
   SeriesSummary,
   Store
 } from '../core/types.js'
-import { isVariantTitle, normTitle, slugify, withDeadline } from '../core/util.js'
 
-export interface ViewSink {
+interface ViewSink {
   hit(provider: ProviderKey, ref: string): void
 }
 
-export interface ListMeta {
+interface ListMeta {
   page: number
   limit: number
   count: number
@@ -34,17 +32,17 @@ export interface ListMeta {
   /** Pesan singkat provider yang gagal (untuk diagnosa), mis. `lumos: HTTP 403 [server: cloudflare]`. */
   errors?: Record<string, string>
 }
-export interface ListResult {
+interface ListResult {
   data: SeriesSummary[]
   meta: ListMeta
 }
-export interface ItemMeta {
+interface ItemMeta {
   provider: ProviderKey
   requestedId: string
   fallback: boolean
   source: DataSource
 }
-export interface PageQuery {
+interface PageQuery {
   page: number
   limit: number
   provider?: ProviderKey
@@ -67,12 +65,12 @@ function statusOf(e: unknown): ProviderStatus {
 }
 
 /** Sisakan item bertipe `type` (mis. "manga"); tanpa `type` semua lolos. */
-export function filterByType(items: SeriesSummary[], type?: string): SeriesSummary[] {
+function filterByType(items: SeriesSummary[], type?: string): SeriesSummary[] {
   return type ? items.filter(i => i.type === type) : items
 }
 
 /** Gabungkan hasil beberapa provider: round-robin, deduplikasi judul sama, kumpulkan `sources`. */
-export function mergeSeries(lists: SeriesSummary[][]): SeriesSummary[] {
+function mergeSeries(lists: SeriesSummary[][]): SeriesSummary[] {
   const byTitle = new Map<string, SeriesSummary>()
   const out: SeriesSummary[] = []
   const longest = Math.max(0, ...lists.map(l => l.length))

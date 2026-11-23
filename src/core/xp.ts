@@ -22,7 +22,7 @@ export const CLIENT_KINDS = ['read', 'bookmark', 'daily'] as const
  */
 export const levelCost = (level: number): number => 40 + 15 * (level - 1) + (level - 1) ** 2
 
-export interface LevelInfo {
+interface LevelInfo {
   level: number
   /** XP yang sudah terkumpul di level ini */
   into: number
@@ -43,7 +43,7 @@ export function levelFor(xp: number): LevelInfo {
 const WIB_MS = 7 * 3600_000
 const DAY_MS = 86_400_000
 
-export interface WeekWindow {
+interface WeekWindow {
   /** Tanggal Senin minggu ini (WIB), "YYYY-MM-DD" — cocok dengan kolom xp_events.day */
   startDay: string
   /** Awal minggu (Senin 00.00 WIB), epoch ms */

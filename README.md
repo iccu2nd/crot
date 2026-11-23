@@ -1,162 +1,64 @@
-# Unified Scraper API
+# MiToon Backend
 
-Satu REST API (Node.js + TypeScript + Fastify) untuk dua provider: **Shinigami** dan **Lumos**.
-Format data seragam, fallback otomatis antar provider, cache Redis (stale-while-revalidate), PostgreSQL sebagai data utama.
+REST API (Node 22 + TypeScript + Fastify) untuk aplikasi MiToon: agregator komik dari **Shinigami** dan **Lumos** dengan format data seragam, fallback otomatis antar provider, cache Redis (stale-while-revalidate), dan PostgreSQL sebagai data utama. Dokumentasi interaktif di `/docs`.
 
 ## Jalankan
+
 ```bash
-docker compose up --build          # API di :3000, dokumentasi di /docs
-# atau lokal:
-cp .env.example .env && npm install && npm run build && npm start
+# Docker (API + PostgreSQL + Redis)
+cp .env.example .env     # isi POSTGRES_PASSWORD & JWT_SECRET
+docker compose up -d --build   # API di :3000, dokumentasi di /docs
+
+# Lokal tanpa Docker
+cp .env.example .env     # aktifkan DATABASE_URL & REDIS_URL di bagian bawah
+npm install && npm run build && npm start
 ```
-Migration otomatis saat start, atau manual `npm run migrate`. Env wajib hanya `DATABASE_URL` dan `REDIS_URL`; `ADMIN_TOKEN` opsional (mengaktifkan endpoint admin pengumuman). Pengaturan lain (TTL, rate limit, prioritas provider) ada di `src/config.ts`.
 
-**Verifikasi scraper ke situs asli (wajib dijalankan sekali di jaringan Anda):**
-```bash
-npm run smoke            # semua provider
-npm run smoke lumos      # satu provider
-```
-Alur: latest → search → detail → chapter, lengkap dengan waktu & jumlah data; exit code 1 jika ada yang gagal.
+Migration berjalan otomatis saat start (`npm run migrate` untuk manual). Env wajib: `DATABASE_URL`, `REDIS_URL` (di compose diisi otomatis), `JWT_SECRET` (produksi). Pengaturan lain (TTL, rate limit, warmer) ada di `src/config.ts`.
 
-Tes: `npm test` (unit). Tes integrasi DB: `TEST_DATABASE_URL=postgres://.../scraper_test npm test`.
+| Perintah | Fungsi |
+|---|---|
+| `npm test` | unit test (`TEST_DATABASE_URL=... npm test` untuk tes integrasi DB) |
+| `npm run typecheck` | cek tipe tanpa build |
+| `npm run smoke [provider]` | uji ke situs asli: latest → search → detail → chapter |
 
-## Deploy ke Vercel (serverless)
-Vercel tidak menjalankan server permanen, jadi proyek memakai `api/index.js` + `vercel.json` dan mode serverless otomatis (`VERCEL=1`):
-tanpa timer latar/warmer, penulisan DB dilakukan inline, tanpa migrate saat runtime.
+## Deploy
 
-1. Siapkan **PostgreSQL terkelola** (Neon / Supabase / Vercel Postgres, pakai URL *pooled*) dan **Redis** (Upstash, URL `rediss://...`).
-2. Di Vercel → Settings → Environment Variables (centang Production **dan Build**): `DATABASE_URL` (akhiri `?sslmode=verify-full`, perilakunya sama dengan `require` di pg versi baru tapi tanpa peringatan) dan `REDIS_URL`. Opsional: `ADMIN_TOKEN` untuk mengelola pengumuman.
-3. Deploy. Build menjalankan `npm run build && npm run migrate` (migration otomatis saat deploy).
-4. Buka `/docs`. Jika masih 500, lihat `vercel logs <request-id>`; penyebab tersering: `DATABASE_URL`/`REDIS_URL` belum diisi atau salah.
+**Server / container apa pun:** jalankan `docker compose up -d --build` (butuh Docker + plugin compose), atau build `Dockerfile` sendiri dengan `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET` dari environment. API mendengarkan di `PORT` (default 3000); `GET /health` untuk health check. Pasang reverse proxy/HTTPS pilihanmu di depannya (Android memblokir HTTP polos untuk APK). Update: tarik kode baru lalu `docker compose up -d --build`; data aman di volume `pgdata`.
 
-Catatan: cold start sedikit lebih lambat (koneksi DB/Redis). Untuk performa terbaik dan warmer aktif, pakai host server biasa (Railway/Render/Fly/VPS + `docker compose up`).
+**Vercel (serverless):** `api/index.js` + `vercel.json`; mode serverless aktif otomatis (`VERCEL=1`): tanpa timer latar/warmer, tanpa migrate saat runtime. Butuh PostgreSQL terkelola (URL *pooled*, akhiri `?sslmode=verify-full`) dan Redis (`rediss://...`). Isi `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET` (centang Production **dan Build**, karena build menjalankan migrate). Server biasa lebih cepat karena L1 cache, warmer, dan prefetch aktif.
 
-## Endpoint (`/v1`, dokumentasi interaktif di `/docs`)
+## Endpoint (`/v1`)
+
 | Endpoint | Fungsi |
 |---|---|
-| `GET /search?q=&page=&limit=&provider=` | cari di semua provider |
-| `GET /latest?page=&limit=&provider=&type=` | update terbaru (`type` = comic/manga/novel; difilter dari tipe tiap seri) |
-| `GET /popular?days=7&page=&limit=` | populer (lihat catatan) |
-| `GET /recommended?page=&limit=&provider=` | rekomendasi: rating tertinggi (hanya seri berating), lalu terbaru |
-| `GET /genres` | daftar genre (DB + genre native Lumos) |
-| `GET /genres/:slug/series?sort=&type=&status=` | seri per genre; `sort` = latest/popular/rating/az, `type` (format) = manga/manhwa/manhua/comic/novel, `status` = ongoing/completed/hiatus |
-| `GET /series/:id` | detail + daftar chapter |
-| `GET /series/:id/chapters` | daftar chapter |
-| `GET /chapters/:id` | gambar chapter + `imageHeaders` |
-| `GET /announcements` | pengumuman aktif untuk aplikasi (maks. 5, terbaru dulu) |
-| `GET /providers` | status provider, circuit breaker, header gambar |
-| `GET /health` | cek PostgreSQL & Redis |
+| `GET /search?q&page&limit&provider` | cari di semua provider |
+| `GET /latest?page&limit&provider&type` | update terbaru (`type` = comic/manga/novel) |
+| `GET /popular?days=7&page&limit` | populer = paling banyak dibuka lewat API ini |
+| `GET /recommended` | rating tertinggi, lalu terbaru |
+| `GET /genres`, `GET /genres/:slug/series?sort&type&status` | genre & seri per genre (`sort`: latest/popular/rating/az) |
+| `GET /series/:id`, `/series/:id/chapters` | detail + chapter |
+| `GET /chapters/:id` | gambar chapter + `imageHeaders` (referer wajib untuk provider tertentu) |
+| `GET /announcements` | pengumuman aktif (maks. 5) |
+| `GET /providers`, `GET /health` | status provider/breaker, cek PostgreSQL & Redis |
 
-**Id unified** = `<provider>:<id asli>`: `shinigami:<uuid>`, `lumos:<slug>`.
-Id chapter: `shinigami:<chapterId>`, `lumos:<slug>:<chapter-slug>` — ambil dari `chapters[].id`.
-Sukses: `{ data, meta }`. Error: `{ error: { code, message } }`.
-Unduh gambar dengan header dari `imageHeaders` (referer wajib untuk provider tertentu).
+Id unified: `<provider>:<id asli>` (`shinigami:<uuid>`, `lumos:<slug>`; chapter Lumos `lumos:<slug>:<chapter-slug>`). Sukses `{ data, meta }`, error `{ error: { code, message } }`.
 
-## Pengumuman (untuk aplikasi MiToon)
-Aplikasi menampilkan `GET /v1/announcements` di Notifikasi › tab Informasi (`{ data: [{ id, title, body, url, createdAt, expiresAt }] }`), bukan di Home. `GET /v1/notifications/unread` mengembalikan `{ count, notif, info }`; `POST /v1/notifications/read?kind=notif|info|all`.
-Data ada di tabel `announcements` (migration `002`). Jika `ADMIN_TOKEN` diisi, tersedia endpoint admin (tidak tampil di `/docs`, dibatasi 10 request/menit):
-```bash
-# tambah (expiresAt opsional, ISO-8601)
-curl -X POST https://API-KAMU/v1/admin/announcements -H "x-admin-token: $ADMIN_TOKEN" -H "content-type: application/json" \
-  -d '{"title":"Update 1.1","body":"Perbaikan reader","url":"https://github.com/akun/repo/releases","expiresAt":"2026-12-31T00:00:00Z"}'
-# hapus
-curl -X DELETE https://API-KAMU/v1/admin/announcements/1 -H "x-admin-token: $ADMIN_TOKEN"
-```
-Tanpa `ADMIN_TOKEN` endpoint admin tidak ada; kelola langsung lewat SQL (`INSERT INTO announcements (title, body, url) VALUES (...)`).
+### Akun, profil, komunitas
+- **Login:** hanya Google (`POST /auth/google`, `GET /auth/me`, `GET /auth/config`); tanpa login = pengunjung (data hanya di perangkat). JWT HS256 90 hari. Isi `GOOGLE_CLIENT_ID` (client type *Web*; buat juga client *Android* untuk `id.mitoon.app` + SHA-1 keystore rilis yang tetap).
+- **Profil:** `PATCH /auth/me` (`displayName` ≤30, `username` sekali per 7 hari → `429 USERNAME_COOLDOWN`, `bio` ≤150 & 3 baris); avatar JPEG ≤300 KB lewat `PUT/DELETE /auth/me/avatar`, publik `GET /users/:id/avatar?v=`; profil publik `GET /users/:id`; hapus akun `DELETE /auth/me?confirm=HAPUS`.
+- **XP & level:** aturan di `src/core/xp.ts` (baca +10, komentar +5, pustaka +3, buka harian +5, disukai +1; batas harian WIB). App melapor `POST /xp/event {type: read|bookmark|daily, ref}`; peringkat mingguan `GET /xp/leaderboard`.
+- **Komentar:** `GET/POST /comments` (target `s:<id seri>` / `c:<id chapter>`, ≤1000 karakter, 10/menit per IP), balasan 1 tingkat, vote `PUT /comments/:id/vote`, riwayat `GET /comments/mine`.
+- **Riwayat baca & pustaka:** `PUT /reading`, `GET /users/:id/reading`, `POST /library/sync` (maks. 1500 seri/akun).
+- **Notifikasi:** `GET /notifications/unread` → `{ count, notif, info }`, `POST /notifications/read?kind=notif|info|all`.
+- **Verified:** email di `OWNER_EMAILS` otomatis verified + akses admin saat masuk Google.
 
-## Kontrak dengan aplikasi
-| Layar aplikasi | Endpoint |
-|---|---|
-| Home › Sorotan / Populer / genre, carousel | `/latest`, `/popular`, `/genres/:slug/series`, `/popular?limit=6` |
-| Notifikasi › Informasi | `/announcements` |
-| Explore (genre, urutkan, format, status) | `/genres`, `/genres/:slug/series?sort&type&status`, `/latest?type`, `/popular` |
-| Cari | `/search` |
-| Detail (info + chapter) | `/series/:id` |
-| Reader | `/chapters/:id` (+ `imageHeaders`), `/providers` (header gambar) |
+### Admin
+Aktif bila `ADMIN_TOKEN` diisi (tidak tampil di `/docs`, 10 request/menit): pengumuman (`POST/DELETE /admin/announcements`, header `x-admin-token`) dan moderasi pengguna/komentar/seri untuk owner (`/admin/users`, `/admin/comments`, ...). Akun owner tidak bisa diblokir/dibisukan/dihapus.
 
-## Kecepatan (penyesuaian untuk MiToon)
-- **Detail dari PostgreSQL saat cache kosong**: seri yang pernah dibuka tersimpan lengkap (sinopsis + chapter) di database. Jika Redis kosong (restart / TTL habis),
-  `/series/:id` langsung dijawab dari PostgreSQL (`meta.source = "db"`) sementara data terbaru diambil di background. Tidak aktif di mode serverless (Vercel).
-- **Daftar tidak menunggu provider paling lambat**: untuk `/latest` dan `/search`, setelah satu provider menjawab dengan data, provider lain hanya ditunggu
-  `listGraceMs` (default 2500 ms, `src/config.ts`). Yang belum selesai ditandai `timeout` di `meta.providers`, tetap lanjut di background dan masuk cache,
-  jadi permintaan berikutnya sudah lengkap. `listGraceMs: 0` = selalu tunggu semua provider seperti sebelumnya.
-- **Prefetch chapter berikutnya**: saat `/chapters/:id` dibuka, chapter `next` diambil lebih dulu di background (`prefetchNextChapter` di `src/config.ts`) sehingga "lanjut baca" langsung dari cache.
-- **View counter** tidak lagi kehilangan hit saat database sempat gagal; hit dikirim ulang pada flush berikutnya.
-- Catatan VPS: Redis di `docker-compose.yml` tanpa persistensi (`--save ""`); berkat fallback PostgreSQL di atas, restart Redis tidak lagi membuat halaman detail lambat.
-
-## Perbaikan kecepatan (v25)
-- **Cache L1 di memori** (`core/cache.ts`): jawaban fresh dilayani tanpa round-trip Redis & tanpa `JSON.parse` ulang. Redis hanya dipakai untuk berbagi antar-instance dan data stale.
-- **Rate limit di memori**, bukan Redis: sebelumnya tiap request menunggu 1 round-trip Redis sebelum diproses.
-- **Genre/Explore tidak lagi menunggu scrape live**: data PostgreSQL dilayani langsung, sinkronisasi katalog Lumos jalan di belakang (hanya ditunggu bila genre itu masih kosong di DB).
-- **`/latest` saat cache kosong** langsung dari PostgreSQL (server biasa) sambil di-refresh di background.
-- **Header CDN**: `s-maxage` + `stale-while-revalidate` pada list/detail/chapter, jadi di Vercel request ramai dilayani dari edge tanpa menyalakan fungsi.
-- **TTL chapter** 6 jam fresh / 7 hari stale (gambar chapter hampir tidak berubah); detail stale 7 hari.
-- **Cold start serverless**: Redis + sync provider paralel; swagger hanya dimuat untuk `/docs` (instance API murni lebih ringan).
-- Migration `015_perf.sql`: index untuk query daftar.
-- Catatan: di Vercel tiap cold start tetap membuat koneksi DB/Redis baru dan warmer tidak jalan. Untuk performa terbaik pakai Railway/VPS (satu proses hidup terus: L1, warmer, dan prefetch chapter aktif). Pastikan region fungsi/DB/Redis sama dan dekat dengan pengguna.
-
-## Fallback
-- **List (search/latest)**: semua provider dipanggil paralel dengan batas waktu; yang gagal dilewati (`meta.degraded`, `meta.providers`). Jika semuanya gagal → cache stale → data terakhir di PostgreSQL.
-- **Detail/chapter**: jika provider asal gagal, dicari seri yang sama (judul ternormalisasi) di provider lain — dari DB, atau lewat search provider lain; chapter dicocokkan lewat nomor. `meta.fallback=true`, `meta.provider` = sumber sebenarnya.
-- Circuit breaker per provider (5 gagal → buka 30 dtk) agar provider mati tidak memperlambat respons.
-
-## Cache & kecepatan
-Redis, stale-while-revalidate + singleflight (request bersamaan = 1 fetch upstream). TTL fresh/stale di `src/config.ts`
-(detail 15 mnt/24 jam, latest 2 mnt/1 jam, search 5 mnt/1 jam, chapter 10 mnt/1 jam). Redis mati → cache dilewati, API tetap jalan.
-Respons di-gzip, ber-`ETag` (304) dan `Cache-Control`. Penulisan ke PostgreSQL dilakukan di background (batch `unnest`).
-Warmer berkala mengisi cache/DB dan memperkaya seri tanpa genre.
-
-## Database (PostgreSQL)
-`providers`, `series` (unik `(provider, ref)`, `norm_title`, index trigram untuk pencarian lokal), `genres` + `series_genres`,
-`chapters` (unik `(series_id, ref)`), `series_views`. Connection pool (10, di Vercel 2), `statement_timeout` 8 dtk.
-Migration: `migrations/*.sql` (transaksional, advisory lock).
-
-## Lumos (parser terbaru)
-Adapter Lumos mengikuti scraper terbaru: tanpa cheerio (regex ringan), thumbnail `?src=<base64>` didekode ke URL CDN,
-katalog `/browse` (genre/sort/type/status) dipakai untuk `genres/:slug/series` — hasilnya langsung disimpan ke PostgreSQL beserta genrenya,
-sehingga genre Lumos ikut lengkap. Sortir & filter akhir dikerjakan SQL agar konsisten lintas provider.
-
-## Shinigami (domain baru)
-Situs `https://s1.shinigami.mx`, API `https://api.shinigami.io/v1`. Keduanya bisa diganti lewat env `SHINIGAMI_BASE_URL` dan `SHINIGAMI_API_URL`. `latest` memakai `is_update=true` (+ `format` bila `type` diisi); entri "Shinigami News" disaring.
-
-## Catatan jujur
-- Scraper asli tidak punya fungsi *popular* dan *genre*, dan saya tidak mengarang endpoint upstream. Maka:
-  **popular** = seri paling banyak dibuka lewat API ini (hit detail) dalam N hari; **genre** = dibangun dari genre seri yang pernah dilihat
-  (list Shinigami memuat genre; Lumos diisi saat genre dibuka lewat `/browse` live, atau dari halaman detail oleh warmer). Keduanya makin lengkap seiring pemakaian.
-- `limit` berlaku per provider; Lumos `latest` memakai ukuran halaman upstream.
-- `date` chapter dinormalkan ke ISO-8601; Lumos tidak menyediakan tanggal.
-
-
-## Akun & login
-
-Login hanya lewat **Masuk dengan Google**; tanpa login, app berjalan sebagai pengunjung (tanpa sesi/akun di server, data hanya di perangkat). Endpoint (`/v1/auth/*`, tampil di `/docs`): `google`, `me`, dan `config` (memberi tahu app apakah tombol Google aktif, jadi **tidak perlu build ulang APK** saat Google diaktifkan). Tabel `users` dibuat otomatis (migration `003`). Migration `025` menghapus akun tamu lama serta kolom `is_guest` dan `password_hash`; token login = JWT HS256 berlaku 90 hari. Endpoint katalog tetap publik.
-
-Env: `JWT_SECRET` (**wajib** di produksi; `openssl rand -hex 32`) dan, opsional untuk Google:
-
-- Isi `GOOGLE_CLIENT_ID` dengan OAuth client type *Web* (Google Cloud Console). Buat juga satu client type *Android* (package `id.mitoon.app` + SHA-1 keystore rilis APK). APK harus ditandatangani keystore yang **tetap** (secret `KEYSTORE_*` di GitHub), kalau tidak SHA-1 berubah tiap build dan Google menolak.
-
-## Profil & komentar
-
-Migration `004` menambah foto profil dan tabel `comments`.
-
-- **Nama & username:** `PATCH /v1/auth/me` (body `{displayName?, username?}`). Nama tampilan bebas (maks. 30 karakter, kosong = pakai username). Username hanya bisa diganti **sekali per 7 hari** (dicek atomik di SQL; bila belum waktunya → `429 USERNAME_COOLDOWN` dengan sisa waktu). `GET /auth/me` dan respons login memuat `displayName` dan `usernameCooldownSec` (sisa detik cooldown). Migration `005`.
-- **Bio:** `PATCH /v1/auth/me` juga menerima `bio` (maks. 150 karakter, maks. 3 baris, kosong = hapus). `bio` ikut di `GET /auth/me`, respons login, dan profil publik `GET /users/:id`. Migration `009`.
-- **XP & level:** tiap pengguna punya `xp` dan level (`GET /auth/me` memuat `xp`, `level`, `levelXp`, `levelNeed`). Kurva: naik dari level L ke L+1 butuh `40 + 15(L-1) + (L-1)²` XP (L1→2 = 40, L10→11 = 256, L50→51 = 3.176). Sumber XP (aturan di `src/core/xp.ts`, mudah diubah): baca chapter **+10** (sekali per chapter, maks. 20/hari), komentar/balasan **+5** (maks. 10/hari), tambah pustaka **+3** (sekali per seri, maks. 5/hari), buka app harian **+5**, komentarmu disukai orang lain **+1** (maks. 20/hari). Tiap aksi dicatat di tabel `xp_events` (unik per user+jenis+ref) sehingga tidak bisa dihitung dua kali; batas harian memakai hari WIB. App melapor lewat `POST /v1/xp/event` `{type: read|bookmark|daily, ref}`; komentar & like dihitung server sendiri. Migration `006`.
-- **Peringkat XP mingguan:** `GET /v1/xp/leaderboard?limit=50` (maks. 100) menjumlahkan XP dari `xp_events` pada minggu berjalan (Senin 00.00 WIB → Senin berikutnya; reset otomatis karena dihitung dari tanggal). Seri skor: yang lebih dulu mencapai skor di atas; akun diblokir tidak ikut. Balasan: `{weekStart, resetAt, now, total, items[{rank,id,username,displayName,avatarV,level,verified,isOwner,premium,weekXp}], me}`; `me` (posisi peminta, juga di luar `limit`) terisi bila request membawa token login. Migration `022` (indeks `xp_events(day, user_id)`).
-- **Komentar:** balasan 1 tingkat (`POST /comments` dengan `parentId`; `GET /comments/:id/replies`), like/dislike `PUT /comments/:id/vote` `{value: 1|-1|0}`. `GET /comments` memberi `hasMore`, dan `likes/dislikes/myVote/replyCount/level` per komentar (`myVote` terisi bila request membawa token).
-- **Foto profil:** `PUT /v1/auth/me/avatar` (body mentah `image/jpeg`, maks. 300 KB; app memotong persegi & mengecilkan ke 384 px sebelum upload), `DELETE /v1/auth/me/avatar`, dan `GET /v1/users/:id/avatar?v=<avatarV>` (publik, di-cache lama; `v` berubah tiap ganti foto). Foto disimpan di PostgreSQL (kolom `bytea`), jadi tidak butuh disk/S3.
-- **Moderasi (owner):** `GET /v1/admin/users?q=&filter=banned|muted|verified|avatar`, `PATCH /v1/admin/users/:id` (`verified`, `banned`+`banReason`, `muted`+`muteDays`(kosong = permanen)+`muteReason`, `clearBio`, `clearName`), `DELETE /v1/admin/users/:id/avatar`, `DELETE /v1/admin/users/:id/comments`, `DELETE /v1/admin/users/:id`, `DELETE /v1/admin/comments/:id`. Akun diblokir ditolak di login & semua endpoint bertoken (403 `BANNED`); akun dibisukan ditolak saat `POST /comments` (403 `MUTED`). Akun owner tidak bisa diblokir/dibisukan/dihapus. Migration `010`.
-- **Riwayat komentar:** `GET /v1/comments/mine?limit=&before=` (wajib login) — komentar & balasan milik akun, terbaru dulu, tiap item memuat `target` (`s:…`/`c:…`), dengan `total`/`hasMore` untuk paginasi. Migration `007` menambah indeks `(user_id, id DESC)`.
-- **Profil publik:** `GET /v1/users/:id` (nama, level, XP, `joinedAt`, `commentCount`; tanpa email) dan `GET /v1/users/:id/comments?limit=&before=` (komentar & balasan pengguna itu, terbaru dulu; `myVote` mengikuti pemirsa bila ada token).
-- **Hapus akun:** `DELETE /v1/auth/me?confirm=HAPUS` (wajib login; maks. 3/menit). Baris `users` dihapus; komentar, suara, dan riwayat XP ikut terhapus lewat `ON DELETE CASCADE`.
-- **Komentar:** `GET /v1/comments?target=…&limit=…&before=…` (publik), `POST /v1/comments` dan `DELETE /v1/comments/:id` (wajib login; hanya penulis yang bisa menghapus). `target` = `s:<id seri>` (halaman detail) atau `c:<id chapter>` (reader). Komentar maks. 1000 karakter, kiriman dibatasi 10/menit per IP. Belum ada moderasi/balasan; hapus komentar bermasalah lewat SQL (`DELETE FROM comments WHERE id = …`).
-
-## Verified & riwayat baca
-
-Migration `008`.
-
-- **Verified (centang biru):** kolom `users.verified`, ikut di `GET /auth/me`, `GET /users/:id`, dan tiap komentar (`user.verified`). Akun yang emailnya ada di `OWNER_EMAILS` (default `hihanghoheng1507@gmail.com`) ditandai otomatis: akun yang **sudah ada** saat migration dijalankan, dan akun yang **masuk lewat Google** (email sudah diverifikasi Google). Tandai manual: `UPDATE users SET verified = true WHERE username = '...';`.
-- **Riwayat baca:** `PUT /v1/reading` (wajib login) `{seriesId, chapterId, chapterNumber, chaptersRead, title?}` menimpa satu baris per seri; `GET /v1/users/:id/reading?limit=&before=` (publik, terbaru dulu, `before` = `readAt` item terakhir) memberi `{items: [{seriesId, title, cover, provider, chapterId, chapterNumber, chaptersRead, readAt}], hasMore}`. Judul & cover diambil dari tabel `series` (bukan dari kiriman pengguna, supaya URL cover tidak bisa diisi sembarang); maksimal 200 seri per pengguna (yang terlama dibuang).
-- **Sinkron pustaka:** `POST /v1/library/sync` (wajib login) `{since, entries}` — kirim perubahan lokal (maks. 200 entri `{id,title,cover,provider,bookmarked,lastChapterId,lastChapterNumber,readAt,read[],updatedAt}`) dan terima entri yang berubah sejak `since`; balasan `{now, hasMore, entries}`. Bookmark mengikuti perubahan terbaru, daftar chapter dibaca digabung (union) kecuali riwayat direset di versi yang lebih baru. Maksimal 1500 seri per akun.
-- **Batas level** dinaikkan dari 1000 ke 10000 supaya tier tampilan level 3000/5000 di app bisa tercapai.
-
+## Cara kerja singkat
+- **Cache:** L1 di memori + Redis, stale-while-revalidate + singleflight; Redis mati = cache dilewati, API tetap jalan. Respons gzip + ETag + `Cache-Control`/`s-maxage`. Rate limit di memori (300/menit per IP).
+- **Fallback:** list memanggil semua provider paralel dan hanya menunggu provider lambat `listGraceMs`; detail/chapter yang gagal dicari di provider lain (judul ternormalisasi, chapter dicocokkan lewat nomor). Circuit breaker per provider (5 gagal → buka 30 dtk). Tanpa Redis, detail dilayani dari PostgreSQL.
+- **Warmer** (server biasa): mengisi cache/DB berkala, crawl katalog genre, prefetch chapter berikutnya.
+- **Database:** `migrations/*.sql` transaksional dengan advisory lock; pool 10 (Vercel 2), `statement_timeout` 8 dtk. Jangan ubah nama/isi migration yang sudah dijalankan.
+- **Shinigami:** domain dapat diganti lewat `SHINIGAMI_BASE_URL` / `SHINIGAMI_API_URL`.

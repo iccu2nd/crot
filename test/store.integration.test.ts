@@ -5,8 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import { after, before, describe, it } from 'node:test'
-import { migrate } from '../src/db/migrate.js'
-import { createPool } from '../src/db/pool.js'
+import { createPool, migrate } from '../src/db/pool.js'
 import { PgStore } from '../src/db/store.js'
 import { AnnouncementRepo } from '../src/services/announcements.js'
 import type { SeriesDetail, SeriesSummary } from '../src/core/types.js'

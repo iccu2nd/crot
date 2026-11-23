@@ -1,6 +1,5 @@
 import { NotFoundError, TimeoutError, UpstreamError } from '../core/errors.js'
-import { request } from '../core/http.js'
-import { cid, sid } from '../core/ids.js'
+import { cid, compact, memo, numOrNull, request, sid, slugify, splitOnce } from '../core/util.js'
 import type {
   BrowseOptions,
   ChapterContent,
@@ -10,7 +9,6 @@ import type {
   SeriesStatus,
   SeriesSummary
 } from '../core/types.js'
-import { compact, memo, numOrNull, slugify, splitOnce } from '../core/util.js'
 
 const KEY = 'lumos'
 const BASES = ['https://03.lumosgg.com', 'https://02.lumosgg.com', 'https://lumoskomik.com']

@@ -1,8 +1,6 @@
 import { NotFoundError, UpstreamError } from '../core/errors.js'
-import { request, retry } from '../core/http.js'
-import { cid, sid } from '../core/ids.js'
+import { cid, compact, isoDate, numOrNull, request, retry, sid } from '../core/util.js'
 import type { ChapterContent, ProviderAdapter, SeriesDetail, SeriesStatus, SeriesSummary } from '../core/types.js'
-import { compact, isoDate, numOrNull } from '../core/util.js'
 
 const KEY = 'shinigami'
 // Situs & API pindah ke domain baru (s1.shinigami.mx / api.shinigami.io). Bisa diganti lewat env bila pindah lagi tanpa ubah kode.

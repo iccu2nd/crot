@@ -1,5 +1,5 @@
 import type { Pool } from 'pg'
-import { parseId } from '../core/ids.js'
+import { parseId } from '../core/util.js'
 import { ValidationError } from '../core/errors.js'
 
 /** Maksimal seri yang disimpan per pengguna (yang terlama dibuang): mencegah tabel dibanjiri. */
@@ -9,7 +9,7 @@ const CTRL = /[\u0000-\u001f\u007f]/g
 const clean = (v: unknown, max: number) => [...String(v ?? '').replace(CTRL, '').replace(/\s+/g, ' ').trim()].slice(0, max).join('')
 const clampLimit = (n: number) => Math.min(Math.max(Math.floor(n) || 30, 1), 50)
 
-export interface ReadingItem {
+interface ReadingItem {
   seriesId: string
   title: string
   /** cover diambil dari katalog server (bukan dari kiriman pengguna); '' bila seri belum ada di katalog */

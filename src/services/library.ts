@@ -1,11 +1,11 @@
 import type { Pool } from 'pg'
-import { parseId } from '../core/ids.js'
+import { parseId } from '../core/util.js'
 
-export const MAX_LIBRARY = 1500
-export const MAX_READ_IDS = 3000
-export const PAGE = 500
+const MAX_LIBRARY = 1500
+const MAX_READ_IDS = 3000
+const PAGE = 500
 
-export interface LibraryEntry {
+interface LibraryEntry {
   id: string
   title: string
   cover: string
@@ -56,7 +56,7 @@ export function normalize(raw: unknown): LibraryEntry | null {
 }
 
 /** Gabungkan dua versi satu seri: bookmark mengikuti yang terbaru diubah; chapter dibaca digabung (kecuali riwayat direset di versi yang lebih baru). */
-export function merge(a: LibraryEntry, b: LibraryEntry): LibraryEntry {
+function merge(a: LibraryEntry, b: LibraryEntry): LibraryEntry {
   const [older, newer] = a.updatedAt > b.updatedAt ? [b, a] : [a, b]
   const reset = newer.cleared
   const latest = reset ? newer : older.readAt > newer.readAt ? older : newer

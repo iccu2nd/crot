@@ -1,10 +1,10 @@
 import type { Pool } from 'pg'
-import { checkTarget, cleanComment } from '../core/comments.js'
+import { checkTarget, cleanComment } from '../core/util.js'
 import { NotFoundError, ValidationError } from '../core/errors.js'
 import { levelFor } from '../core/xp.js'
 import type { XpService } from './xp.js'
 
-export interface CommentItem {
+interface CommentItem {
   id: number
   body: string
   createdAt: number
@@ -49,13 +49,13 @@ const select = (viewer: string) => `SELECT c.id, c.target, c.body, c.created_at,
                 FROM comments c JOIN users u ON u.id = c.user_id LEFT JOIN users ru ON ru.id = c.reply_to_user_id`
 
 /** Komentar milik sendiri: sama seperti CommentItem + `target` (s:… / c:…) supaya app tahu di mana komentar itu ditulis. */
-export interface MyCommentItem extends CommentItem {
+interface MyCommentItem extends CommentItem {
   target: string
 }
 
 const clampLimit = (limit: number) => Math.min(Math.max(Math.floor(limit) || 20, 1), 50)
 
-export interface VoteResult {
+interface VoteResult {
   likes: number
   dislikes: number
   myVote: number

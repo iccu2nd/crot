@@ -1,6 +1,5 @@
 import { config } from '../config.js'
-import { migrate } from './migrate.js'
-import { createPool } from './pool.js'
+import { createPool, migrate } from './pool.js'
 
 const pool = createPool(config)
 try {

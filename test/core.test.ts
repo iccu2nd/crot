@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { CircuitBreaker } from '../src/core/breaker.js'
+import { CircuitBreaker, isoDate, memo, normTitle, parseId, slugify, splitOnce, withDeadline } from '../src/core/util.js'
 import { Cache } from '../src/core/cache.js'
 import { ViewCounter } from '../src/services/views.js'
 import { ValidationError, dbErrorStatus } from '../src/core/errors.js'
-import { parseId } from '../src/core/ids.js'
-import { isoDate, memo, normTitle, slugify, splitOnce, withDeadline } from '../src/core/util.js'
 import { MemoryKV, noopLog } from './helpers.js'
 
 describe('ids & util', () => {

@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
-import { MAX_AVATAR_BYTES, isJpeg } from '../core/comments.js'
+import { MAX_AVATAR_BYTES, isJpeg } from '../core/util.js'
 import { NotFoundError, ValidationError } from '../core/errors.js'
 import type { AuthService } from '../services/auth.js'
 

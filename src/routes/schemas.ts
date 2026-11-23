@@ -9,7 +9,7 @@ const source = {
   required: ['provider', 'id']
 } as const
 
-export const seriesSummary = {
+const seriesSummary = {
   type: 'object',
   properties: {
     id: { ...str, description: 'Id unified: "<provider>:<id asli>"' },
@@ -28,13 +28,13 @@ export const seriesSummary = {
   required: ['id', 'provider', 'title', 'cover', 'url', 'genres', 'sources']
 } as const
 
-export const chapterSummary = {
+const chapterSummary = {
   type: 'object',
   properties: { id: str, number: str, title: str, date: { type: 'string', format: 'date-time', nullable: true } },
   required: ['id', 'number', 'title']
 } as const
 
-export const seriesDetail = {
+const seriesDetail = {
   type: 'object',
   properties: {
     ...seriesSummary.properties,
@@ -47,7 +47,7 @@ export const seriesDetail = {
   required: seriesSummary.required
 } as const
 
-export const chapterContent = {
+const chapterContent = {
   type: 'object',
   properties: {
     id: str,

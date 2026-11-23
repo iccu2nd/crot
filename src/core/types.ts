@@ -61,7 +61,7 @@ export interface BrowseOptions {
   q?: string
 }
 
-export interface ListOptions {
+interface ListOptions {
   page: number
   limit: number
   type?: string

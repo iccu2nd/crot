@@ -1,5 +1,5 @@
 import type { FastifyBaseLogger } from 'fastify'
-import { parseId } from '../core/ids.js'
+import { parseId } from '../core/util.js'
 import type { ProviderKey, Store } from '../core/types.js'
 import type { ScraperService } from './scraper.js'
 

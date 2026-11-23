@@ -8,7 +8,7 @@ export interface KV {
 
 /** fallback = cache kosong tapi ada data lokal (PostgreSQL) yang dilayani langsung sambil di-refresh di background */
 export type CacheState = 'hit' | 'stale' | 'miss' | 'fallback'
-export interface Ttl {
+interface Ttl {
   fresh: number
   stale: number
 }
