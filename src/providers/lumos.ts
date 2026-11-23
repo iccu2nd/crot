@@ -391,14 +391,21 @@ export function createLumos(): ProviderAdapter {
       const pick = (re: RegExp) => text(html.match(re)?.[1])
 
       const found: { slug: string; number: string; title: string; date: string | null }[] = []
-      for (const m of html.matchAll(/<a[^>]+href="(\/read\/([^\/]+)\/([a-zA-Z0-9_\-]+))"[^>]+data-chapter="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)) {
-        if (m[2] !== slug || found.some(c => c.slug === m[3])) continue
+      const anchors = [...html.matchAll(/<a[^>]+href="(\/read\/([^\/]+)\/([a-zA-Z0-9_\-]+))"[^>]+data-chapter="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)]
+      const TIME_SPAN = /<span[^>]*class="[^"]*(?:tabular-nums|text-\[11px\])[^"]*"[^>]*>([\s\S]*?)<\/span>/i
+      anchors.forEach((m, i) => {
+        if (m[2] !== slug || found.some(c => c.slug === m[3])) return
+        const start = m.index ?? 0
+        const ctx = html.slice(start, Math.min(anchors[i + 1]?.index ?? Infinity, start + m[0].length + 600))
         found.push({
           slug: m[3],
           number: m[4].trim() || numberFromSlug(m[3]),
           title: text(m[5].match(/<span[^>]*class="[^"]*text-heading[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1]),
-          date: relativeToIso(text(m[5].match(/<span[^>]*class="[^"]*(?:tabular-nums|text-\[11px\])[^"]*"[^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? '')) ?? relativeToIso(text(m[5]))
+          date: relativeToIso(text(ctx.match(TIME_SPAN)?.[1] ?? '')) ?? relativeToIso(text(ctx))
         })
+      })
+      if (anchors.length && !found.some(c => c.date)) {
+        try { console.warn(`[lumos] ${slug}: tidak ada tanggal terbaca. Contoh baris: ${html.slice(anchors[0].index ?? 0, (anchors[0].index ?? 0) + 700).replace(/\s+/g, ' ')}`) } catch {}
       }
       found.sort(byNumber)
       const rows = found.length ? found : await chapterListApi(slug, signal).catch(() => [])

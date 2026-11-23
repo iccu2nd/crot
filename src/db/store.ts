@@ -62,7 +62,7 @@ ON CONFLICT (series_id, ref) DO UPDATE SET
   number_text = EXCLUDED.number_text,
   title       = EXCLUDED.title,
   released_at = COALESCE(EXCLUDED.released_at, chapters.released_at)
-WHERE (chapters.number_text, chapters.title) IS DISTINCT FROM (EXCLUDED.number_text, EXCLUDED.title)`
+WHERE (chapters.number_text, chapters.title, chapters.released_at) IS DISTINCT FROM (EXCLUDED.number_text, EXCLUDED.title, COALESCE(EXCLUDED.released_at, chapters.released_at))`
 
 const GENRE_ORDER: Record<SortKey, string> = {
   latest: 'x.last_seen_at DESC, x.id',
