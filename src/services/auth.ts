@@ -64,9 +64,9 @@ type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: strin
 
 /** Username hanya boleh diganti sekali per 7 hari. */
 const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, verified_hidden AS "verifiedHidden", reading_hidden AS "readingHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason"`
+const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, verified_hidden AS "verifiedHidden", reading_hidden AS "readingHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason", token_version AS "tokenVersion"`
 
-type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; verifiedHidden?: boolean; readingHidden?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null }
+type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; verifiedHidden?: boolean; readingHidden?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null; tokenVersion?: number | null }
 /** Waktu bisu (epoch ms) bila masih berlaku, selain itu 0. */
 const mutedUntilMs = (v: Date | string | null | undefined, now = Date.now()): number => {
   const t = v ? new Date(v).getTime() : 0
@@ -128,7 +128,7 @@ export class AuthService {
 
   private issue(u: Row): AuthResult {
     this.assertNotBanned(u)
-    return { token: signToken(u.id, this.secret, this.cfg.tokenTtlSec), user: toUser(u, this.cfg.ownerEmails) }
+    return { token: signToken(u.id, this.secret, this.cfg.tokenTtlSec, Date.now(), u.tokenVersion ?? 0), user: toUser(u, this.cfg.ownerEmails) }
   }
 
   /** Id pengguna dari token (tanpa query DB); null bila tidak ada/tidak valid. Untuk endpoint publik yang menyesuaikan tampilan per pengguna. */
@@ -144,8 +144,15 @@ export class AuthService {
     if (!claims) throw new UnauthorizedError('Sesi tidak valid, silakan masuk lagi')
     const { rows } = await this.pool.query('SELECT ' + COLS + ' FROM users WHERE id = $1', [claims.sub])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
+    if ((rows[0].tokenVersion ?? 0) !== claims.tv) throw new UnauthorizedError('Sesi sudah dicabut, silakan masuk lagi')
     this.assertNotBanned(rows[0])
     return toUser(rows[0], this.cfg.ownerEmails)
+  }
+
+  /** Cabut semua token akun ini (semua perangkat, termasuk yang sedang dipakai). */
+  async logoutAll(authorization: string | undefined): Promise<void> {
+    const u = await this.me(authorization)
+    await this.pool.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [u.id])
   }
 
   /** Sama seperti me(), tapi 403 jika bukan owner (email di OWNER_EMAILS). */

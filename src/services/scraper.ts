@@ -417,16 +417,46 @@ export class ScraperService {
   // ------------------------------------------------------------------ detail & chapter (dengan fallback)
 
   private readonly forcedAt = new Map<string, number>()
-  /** Ambil ulang manual dari pengguna: dibatasi 1x per kunci per menit di server (di luar batas harian di aplikasi). */
+  private forceLog: number[] = []
+  /** Anggaran global ambil-ulang paksa per menit (semua pengguna): ?refresh=1 tidak bisa dipakai membanjiri upstream dengan id berbeda-beda. */
+  private static readonly FORCE_GLOBAL_PER_MIN = 30
+  /** Ambil ulang manual dari pengguna: dibatasi 1x per kunci per menit + anggaran global per menit di server (di luar batas harian di aplikasi). */
   private allowForce(key: string): boolean {
     const now = Date.now()
     if (now - (this.forcedAt.get(key) ?? 0) < 60_000) return false
+    this.forceLog = this.forceLog.filter(t => now - t < 60_000)
+    if (this.forceLog.length >= ScraperService.FORCE_GLOBAL_PER_MIN) return false
+    this.forceLog.push(now)
     this.forcedAt.set(key, now)
     if (this.forcedAt.size > 500) for (const [k, t] of this.forcedAt) if (now - t >= 60_000) this.forcedAt.delete(k)
     return true
   }
 
+  /** Cache negatif: id yang baru saja 404 di upstream tidak ditanyakan lagi ke upstream selama 60 detik (anti-banjir id acak). */
+  private readonly missing = new Map<string, number>()
+  private static readonly MISSING_TTL_MS = 60_000
+  private static readonly MISSING_MAX = 2000
+  private async unlessMissing<T>(key: string, force: boolean, run: () => Promise<T>): Promise<T> {
+    const now = Date.now()
+    if (!force && (this.missing.get(key) ?? 0) > now) throw new NotFoundError('Not found upstream')
+    try {
+      const v = await run()
+      this.missing.delete(key)
+      return v
+    } catch (e) {
+      if (e instanceof NotFoundError) {
+        this.missing.set(key, now + ScraperService.MISSING_TTL_MS)
+        if (this.missing.size > ScraperService.MISSING_MAX) for (const [k, t] of this.missing) if (t <= now || this.missing.size > ScraperService.MISSING_MAX) this.missing.delete(k)
+      }
+      throw e
+    }
+  }
+
   private detailFrom(p: ProviderAdapter, ref: string, force = false) {
+    return this.unlessMissing(`d:${p.key}:${ref}`, force, () => this.detailCached(p, ref, force))
+  }
+
+  private detailCached(p: ProviderAdapter, ref: string, force: boolean) {
     return this.o.cache.getOrSet<SeriesDetail>(
       `d2:${p.key}:${ref}`,
       this.o.cfg.ttl.detail,
@@ -443,6 +473,10 @@ export class ScraperService {
   }
 
   private chapterFrom(p: ProviderAdapter, ref: string, force = false) {
+    return this.unlessMissing(`c:${p.key}:${ref}`, force, () => this.chapterCached(p, ref, force))
+  }
+
+  private chapterCached(p: ProviderAdapter, ref: string, force: boolean) {
     return this.o.cache.getOrSet<ChapterContent>(
       `c:${p.key}:${ref}`,
       this.o.cfg.ttl.chapter,

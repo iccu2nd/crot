@@ -1,5 +1,6 @@
 import type { Pool } from 'pg'
 import { ValidationError } from '../core/errors.js'
+import { PROVIDER_KEYS, type ProviderKey } from '../core/types.js'
 import { CLIENT_KINDS, XP_RULES, levelFor, weekWindow, type XpKind } from '../core/xp.js'
 
 const REF_RE = /^[a-z0-9_-]{2,20}:[^\s]{1,300}$/i
@@ -40,7 +41,7 @@ export class XpService {
     if (!CLIENT_KINDS.includes(type as never)) throw new ValidationError('Jenis aktivitas tidak valid')
     const kind = type as (typeof CLIENT_KINDS)[number]
     if (kind === 'daily') return this.award(userId, 'daily', wibDay())
-    if (typeof ref !== 'string' || !REF_RE.test(ref)) throw new ValidationError('Referensi tidak valid')
+    if (typeof ref !== 'string' || !REF_RE.test(ref) || !PROVIDER_KEYS.includes(ref.split(':')[0] as ProviderKey)) throw new ValidationError('Referensi tidak valid')
     return this.award(userId, kind, ref)
   }
 

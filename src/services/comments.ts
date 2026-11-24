@@ -1,6 +1,6 @@
 import type { Pool } from 'pg'
 import { checkTarget, cleanComment } from '../core/util.js'
-import { NotFoundError, ValidationError } from '../core/errors.js'
+import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
 import { levelFor } from '../core/xp.js'
 import type { XpService } from './xp.js'
 
@@ -61,6 +61,9 @@ interface VoteResult {
   myVote: number
 }
 
+/** Batas kiriman per akun: mencegah banjir komentar walau IP berganti-ganti (rate limit per IP saja tidak cukup). */
+const MAX_COMMENTS_PER_MINUTE = 6
+
 /**
  * Komentar per target (seri / chapter): terbaru dulu, paginasi keyset (`before` = id terakhir yang sudah dimuat).
  * Balasan 1 tingkat: selalu menempel ke komentar teratas (urut lama → baru). Like/dislike per pengguna.
@@ -104,6 +107,8 @@ export class CommentService {
   async add(userId: number, target: unknown, body: unknown, replyToId?: number | null): Promise<CommentItem> {
     const t = checkTarget(target)
     const text = cleanComment(body)
+    const recent = await this.pool.query("SELECT count(*)::int AS n FROM comments WHERE user_id = $1 AND created_at > now() - interval '60 seconds'", [userId])
+    if (Number(recent.rows[0]?.n ?? 0) >= MAX_COMMENTS_PER_MINUTE) throw new AppError(429, 'RATE_LIMITED', 'Terlalu cepat, tunggu sebentar sebelum berkomentar lagi')
     let parentId: number | null = null
     let replyToUser: number | null = null
     if (replyToId != null) {

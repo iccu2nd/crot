@@ -76,11 +76,26 @@ export function memo<T>(fn: (arg: string) => Promise<T>, ttlMs: number, max = 50
 export const sid = (provider: ProviderKey, ref: string) => `${provider}:${ref}`
 export const cid = sid
 
+/** Pemisah path / dot-segment (juga bentuk %-encoded-nya) tidak boleh ada di id: id dipakai membentuk URL upstream. */
+const ENCODED_SEPARATOR = /%(?:2e|2f|5c|3f|23|00)/i
+const isDotSegment = (s: string) => /^\.+$/.test(s)
+
+/** Satu segmen path upstream yang aman (bukan "." / "..", tanpa pemisah/encoding berbahaya), sudah di-encode. */
+export function pathSegment(raw: string): string {
+  if (!raw || raw.length > 300 || isDotSegment(raw) || ENCODED_SEPARATOR.test(raw) || /[\u0000-\u001f/\\?#]/.test(raw)) {
+    throw new ValidationError('Invalid id, expected "<provider>:<id>"')
+  }
+  return encodeURIComponent(raw)
+}
+
 export function parseId(id: string): { provider: ProviderKey; ref: string } {
   const i = id.indexOf(':')
   const provider = id.slice(0, i) as ProviderKey
   const ref = id.slice(i + 1)
-  if (i < 1 || !PROVIDER_KEYS.includes(provider) || !ref || ref.length > 300 || /[\u0000-\u001f/\\?#]/.test(ref)) {
+  if (
+    i < 1 || !PROVIDER_KEYS.includes(provider) || !ref || ref.length > 300 || /[\u0000-\u001f/\\?#]/.test(ref) ||
+    ENCODED_SEPARATOR.test(ref) || ref.split(':').some(isDotSegment)
+  ) {
     throw new ValidationError('Invalid id, expected "<provider>:<id>"')
   }
   return { provider, ref }
@@ -174,7 +189,7 @@ const TARGET_RE = /^[sc]:[a-z0-9_-]{2,20}:[^\s]{1,300}$/i
 const MAX_COMMENT = 1000
 
 export function checkTarget(t: unknown): string {
-  if (typeof t !== 'string' || !TARGET_RE.test(t)) throw new ValidationError('Target komentar tidak valid')
+  if (typeof t !== 'string' || !TARGET_RE.test(t) || !PROVIDER_KEYS.includes(t.split(':')[1] as ProviderKey)) throw new ValidationError('Target komentar tidak valid')
   return t
 }
 

@@ -108,8 +108,8 @@ export const adminRoutes: FastifyPluginAsync<{
           additionalProperties: false,
           properties: {
             title: { type: 'string', minLength: 1, maxLength: 500 },
-            cover: { type: 'string', maxLength: 2000 },
-            url: { type: 'string', maxLength: 2000 },
+            cover: { type: 'string', maxLength: 2000, pattern: '^(https?://.*)?$' },
+            url: { type: 'string', maxLength: 2000, pattern: '^(https?://.*)?$' },
             type: { type: ['string', 'null'], maxLength: 40 },
             status: { type: ['string', 'null'], enum: ['ongoing', 'completed', 'hiatus', null] },
             synopsis: { type: 'string', maxLength: 20000 },

@@ -6,7 +6,7 @@ import { AuthService } from '../src/services/auth.js'
 test('token: valid, kedaluwarsa, dirusak, secret lain', () => {
   const now = 1_700_000_000_000
   const t = signToken(7, 's3cret', 60, now)
-  assert.deepEqual(verifyToken(t, 's3cret', now + 1000), { sub: 7 })
+  assert.deepEqual(verifyToken(t, 's3cret', now + 1000), { sub: 7, tv: 0 })
   assert.equal(verifyToken(t, 's3cret', now + 61_000), null)
   assert.equal(verifyToken(t, 'lain', now), null)
   const [h, , s] = t.split('.')

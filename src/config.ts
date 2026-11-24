@@ -1,3 +1,4 @@
+import { parseTrustProxy } from './core/security.js'
 import { PROVIDER_KEYS } from './core/types.js'
 
 const env = process.env
@@ -13,7 +14,8 @@ export const config = {
   port: Number(env.PORT) || 3000,
   host: '0.0.0.0',
   logLevel: 'info',
-  trustProxy: true,
+  /** Jumlah reverse proxy tepercaya (env TRUST_PROXY: angka, "false", atau daftar CIDR). `true` dilarang: X-Forwarded-For bisa dipalsukan untuk lolos rate limit. */
+  trustProxy: parseTrustProxy(env.TRUST_PROXY),
   databaseUrl: env.DATABASE_URL ?? 'postgres://scraper:scraper@localhost:5432/scraper',
   redisUrl: env.REDIS_URL ?? 'redis://localhost:6379',
   adminToken: env.ADMIN_TOKEN ?? '',

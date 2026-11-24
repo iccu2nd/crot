@@ -1,5 +1,5 @@
 import { NotFoundError, UpstreamError } from '../core/errors.js'
-import { cid, compact, isoDate, numOrNull, request, retry, sid } from '../core/util.js'
+import { cid, compact, isoDate, numOrNull, pathSegment, request, retry, sid } from '../core/util.js'
 import type { ChapterContent, ProviderAdapter, SeriesDetail, SeriesStatus, SeriesSummary } from '../core/types.js'
 
 const KEY = 'shinigami'
@@ -65,7 +65,7 @@ async function walkChapters(id: string, order: 'asc' | 'desc', seen: Map<string,
     if (cursor) qs.set('cursor', cursor)
     let res: Raw
     try {
-      res = await api(`/v1/chapter/${id}/list?${qs}`)
+      res = await api(`/v1/chapter/${pathSegment(id)}/list?${qs}`)
     } catch (e) {
       if (i === 0) throw e
       return
@@ -108,7 +108,7 @@ export function createShinigami(): ProviderAdapter {
     latest: ({ page, limit, type }) => list('', page, limit, type),
 
     async detail(ref): Promise<SeriesDetail> {
-      const [res, chapters] = await Promise.all([api(`/v1/manga/detail/${ref}`), chapterList(ref)])
+      const [res, chapters] = await Promise.all([api(`/v1/manga/detail/${pathSegment(ref)}`), chapterList(ref)])
       const d: Raw | undefined = res.data
       if (!d) throw new NotFoundError('Manga tidak ditemukan')
       const base = toSummary({ ...d, manga_id: d.manga_id ?? ref })
@@ -126,7 +126,7 @@ export function createShinigami(): ProviderAdapter {
     },
 
     async chapter(ref): Promise<ChapterContent> {
-      const d: Raw | undefined = (await api(`/v1/chapter/detail/${ref}`)).data
+      const d: Raw | undefined = (await api(`/v1/chapter/detail/${pathSegment(ref)}`)).data
       if (!d) throw new NotFoundError('Chapter tidak ditemukan')
       const ch: Raw = d.chapter || {}
       const root = d.base_url || ch.base_url || ''

@@ -41,6 +41,7 @@ function fakePool() {
   return {
     rows, votes,
     async query(sql: string, p: any[] = []) {
+      if (sql.includes("interval '60 seconds'")) return { rows: [{ n: 0 }] }
       if (sql.startsWith('INSERT INTO comments')) {
         const c = { id: ++seq, target: p[0], user_id: p[1], body: p[2], parent_id: p[3], reply_to_user_id: p[4], created_at: new Date(1_700_000_000_000 + seq) }
         rows.push(c)

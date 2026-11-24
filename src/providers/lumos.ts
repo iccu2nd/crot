@@ -1,5 +1,5 @@
 import { NotFoundError, TimeoutError, UpstreamError } from '../core/errors.js'
-import { cid, compact, memo, numOrNull, request, sid, slugify, splitOnce } from '../core/util.js'
+import { cid, compact, memo, numOrNull, pathSegment, request, sid, slugify, splitOnce } from '../core/util.js'
 import type {
   BrowseOptions,
   ChapterContent,
@@ -387,7 +387,7 @@ export function createLumos(): ProviderAdapter {
     async detail(ref): Promise<SeriesDetail> {
       const slug = ref
       const signal = budget(PAGE_BUDGET_MS)
-      const html = await getHtml(`/comic/${encodeURIComponent(slug)}`, signal)
+      const html = await getHtml(`/comic/${pathSegment(slug)}`, signal)
       const pick = (re: RegExp) => text(html.match(re)?.[1])
 
       const found: { slug: string; number: string; title: string; date: string | null }[] = []
@@ -445,7 +445,7 @@ export function createLumos(): ProviderAdapter {
     /** ref chapter = `<comicSlug>:<chapterSlug>` */
     async chapter(ref): Promise<ChapterContent> {
       const [slug, chapterSlug] = splitOnce(ref)
-      const html = await getHtml(`/read/${encodeURIComponent(slug)}/${encodeURIComponent(chapterSlug)}`, budget(PAGE_BUDGET_MS))
+      const html = await getHtml(`/read/${pathSegment(slug)}/${pathSegment(chapterSlug)}`, budget(PAGE_BUDGET_MS))
 
       const pages = [...html.matchAll(/<img[^>]+(?:alt="Page\s*(\d+)"[^>]+src="([^"]+)"|src="([^"]+)"[^>]+alt="Page\s*(\d+)")/gi)]
         .map(m => ({ page: parseInt(m[1] || m[4], 10), url: image(m[2] || m[3]) }))

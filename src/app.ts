@@ -6,6 +6,7 @@ import { Redis } from 'ioredis'
 import type { Config } from './config.js'
 import { Cache } from './core/cache.js'
 import { AppError, dbErrorStatus } from './core/errors.js'
+import { applySecurityHeaders } from './core/security.js'
 import { createPool, migrate } from './db/pool.js'
 import { PgStore } from './db/store.js'
 import { createProviders } from './providers/index.js'
@@ -34,7 +35,8 @@ import { XpService } from './services/xp.js'
 
 /** Composition root: merangkai semua dependensi. */
 export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
-  const docs = opts.docs ?? true
+  // Swagger publik hanya di non-produksi, kecuali ENABLE_DOCS=1
+  const docs = opts.docs ?? (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DOCS === '1')
   const app = Fastify({
     logger: { level: cfg.logLevel },
     trustProxy: cfg.trustProxy,
@@ -79,6 +81,12 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   const views = new ViewCounter(store, log, 15_000, cfg.serverless)
   const svc = new ScraperService({ adapters, cache: new Cache(redis, log), store, views, log, cfg })
   const warmer = new Warmer(svc, store, cfg.providers, log, { ...cfg.warmer, watchNew: push.configured })
+
+  // ---- header keamanan di semua respons ----
+  app.addHook('onSend', async (_req, reply, payload) => {
+    applySecurityHeaders(reply)
+    return payload
+  })
 
   // ---- ETag (dihitung sebelum kompresi) ----
   app.addHook('onSend', async (req, reply, payload) => {

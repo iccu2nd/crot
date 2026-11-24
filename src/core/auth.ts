@@ -4,15 +4,16 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 
 const b64u = (v: Buffer | string) => Buffer.from(v).toString('base64url')
 
-export function signToken(sub: number, secret: string, ttlSec: number, now = Date.now()): string {
+export function signToken(sub: number, secret: string, ttlSec: number, now = Date.now(), tv = 0): string {
   const head = b64u(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
   const iat = Math.floor(now / 1000)
-  const body = b64u(JSON.stringify({ sub, iat, exp: iat + ttlSec }))
+  const body = b64u(JSON.stringify({ sub, iat, exp: iat + ttlSec, tv }))
   const sig = createHmac('sha256', secret).update(`${head}.${body}`).digest('base64url')
   return `${head}.${body}.${sig}`
 }
 
-export function verifyToken(token: string, secret: string, now = Date.now()): { sub: number } | null {
+/** `tv` = versi token akun; naik saat "keluar dari semua perangkat" sehingga token lama langsung mati. Token lama tanpa `tv` dianggap 0. */
+export function verifyToken(token: string, secret: string, now = Date.now()): { sub: number; tv: number } | null {
   const parts = token.split('.')
   if (parts.length !== 3) return null
   const [h, b, s] = parts
@@ -22,7 +23,7 @@ export function verifyToken(token: string, secret: string, now = Date.now()): { 
   try {
     const p = JSON.parse(Buffer.from(b, 'base64url').toString())
     if (typeof p.sub !== 'number' || typeof p.exp !== 'number' || p.exp * 1000 < now) return null
-    return { sub: p.sub }
+    return { sub: p.sub, tv: typeof p.tv === 'number' ? p.tv : 0 }
   } catch {
     return null
   }

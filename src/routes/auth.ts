@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
+import { USER_CONTENT_CSP } from '../core/security.js'
 import { MAX_AVATAR_BYTES, isJpeg } from '../core/util.js'
 import { NotFoundError, ValidationError } from '../core/errors.js'
 import type { AuthService } from '../services/auth.js'
@@ -36,6 +37,12 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     return { data: await auth.setAvatar(user.id, body) }
   })
 
+  app.post('/auth/logout-all', { schema: { tags: ['auth'], summary: 'Keluar dari semua perangkat (cabut semua token)' }, config: limit(5) }, async (req, reply) => {
+    await auth.logoutAll(req.headers.authorization)
+    reply200(reply)
+    return { data: { ok: true } }
+  })
+
   app.delete('/auth/me/avatar', { schema: { tags: ['auth'], summary: 'Hapus foto profil' }, config: limit(10) }, async (req, reply) => {
     const user = await auth.me(req.headers.authorization)
     reply200(reply)
@@ -49,7 +56,12 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     async (req, reply) => {
       const buf = await auth.avatarOf((req.params as { id: number }).id)
       if (!buf) throw new NotFoundError('Belum ada foto profil')
-      return reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=31536000, immutable').send(buf)
+      return reply
+        .header('content-type', 'image/jpeg')
+        .header('content-security-policy', USER_CONTENT_CSP)
+        .header('content-disposition', 'inline; filename="avatar.jpg"')
+        .header('cache-control', 'public, max-age=31536000, immutable')
+        .send(buf)
     }
   )
 
