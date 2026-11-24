@@ -39,7 +39,11 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   const docs = opts.docs ?? (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DOCS === '1')
   const app = Fastify({
     logger: { level: cfg.logLevel },
-    trustProxy: cfg.trustProxy,
+    // number -> fungsi: tipe opsi Fastify tidak menerima number; semantik sama (percaya `n` hop terdekat)
+    trustProxy:
+      typeof cfg.trustProxy === 'number'
+        ? ((_addr: string, hop: number) => hop < (cfg.trustProxy as number))
+        : cfg.trustProxy,
     maxParamLength: 300,
     keepAliveTimeout: 65_000, // > idle timeout proxy (Railway/Nginx ~60s): koneksi dipakai ulang, tanpa handshake TLS ulang
     connectionTimeout: 30_000
