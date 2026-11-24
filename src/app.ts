@@ -25,6 +25,7 @@ import { AuthService } from './services/auth.js'
 import { CommentService } from './services/comments.js'
 import { LibraryService } from './services/library.js'
 import { NotificationService } from './services/notifications.js'
+import { PushService } from './services/push.js'
 import { ReadingService } from './services/reading.js'
 import { ScraperService } from './services/scraper.js'
 import { ViewCounter } from './services/views.js'
@@ -50,6 +51,8 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
     if (applied.length) log.info({ applied }, 'migrations applied')
   }
   const store = new PgStore(pool)
+  const push = new PushService(cfg.firebaseServiceAccount, app.log, store)
+  if (push.configured) store.onNewChapters((s, chapters) => push.newChapter(s, chapters))
 
   // ---- Redis (opsional saat runtime: jika mati, cache dilewati) ----
   const redis = new Redis(cfg.redisUrl, {
@@ -75,7 +78,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   // ---- domain ----
   const views = new ViewCounter(store, log, 15_000, cfg.serverless)
   const svc = new ScraperService({ adapters, cache: new Cache(redis, log), store, views, log, cfg })
-  const warmer = new Warmer(svc, store, cfg.providers, log, cfg.warmer)
+  const warmer = new Warmer(svc, store, cfg.providers, log, { ...cfg.warmer, watchNew: push.configured })
 
   // ---- ETag (dihitung sebelum kompresi) ----
   app.addHook('onSend', async (req, reply, payload) => {
@@ -172,7 +175,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
       await v1.register(libraryRoutes, { auth, library: new LibraryService(pool) })
       await v1.register(announcementRoutes, { repo: announcements })
       await v1.register(notificationRoutes, { auth, notifications: new NotificationService(pool) })
-      await v1.register(adminRoutes, { auth, store, announcements, svc, adminToken: cfg.adminToken, ownerEmails: cfg.auth.ownerEmails })
+      await v1.register(adminRoutes, { auth, store, announcements, svc, push, adminToken: cfg.adminToken, ownerEmails: cfg.auth.ownerEmails })
     },
     { prefix: '/v1' }
   )

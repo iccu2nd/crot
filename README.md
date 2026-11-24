@@ -14,6 +14,8 @@ cp .env.example .env     # aktifkan DATABASE_URL & REDIS_URL di bagian bawah
 npm install && npm run build && npm start
 ```
 
+Push realtime (opsional): isi `FIREBASE_SERVICE_ACCOUNT` dengan JSON service account Firebase (mentah atau base64). Tiap chapter baru dikirim sebagai pesan data FCM ke topic `s_<sha1(seriesId)[0..24]>`; aplikasi subscribe otomatis untuk komik di bookmark. Kosong = push nonaktif.
+
 Migration berjalan otomatis saat start (`npm run migrate` untuk manual). Env wajib: `DATABASE_URL`, `REDIS_URL` (di compose diisi otomatis), `JWT_SECRET` (produksi). Pengaturan lain (TTL, rate limit, warmer) ada di `src/config.ts`.
 
 | Perintah | Fungsi |

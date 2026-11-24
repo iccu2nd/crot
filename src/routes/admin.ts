@@ -5,6 +5,7 @@ import type { AnnouncementRepo } from '../services/announcements.js'
 import { NotFoundError, ValidationError } from '../core/errors.js'
 import type { ScraperService } from '../services/scraper.js'
 import { tokenMatches } from './announcements.js'
+import type { PushService } from '../services/push.js'
 
 /** Panel admin: hanya akun owner (email di OWNER_EMAILS). Kontrol penuh data komik & user. */
 export const adminRoutes: FastifyPluginAsync<{
@@ -12,9 +13,10 @@ export const adminRoutes: FastifyPluginAsync<{
   store: PgStore
   announcements: AnnouncementRepo
   svc: ScraperService
+  push: PushService
   adminToken?: string
   ownerEmails?: string[]
-}> = async (app, { auth, store, announcements, svc, adminToken = '', ownerEmails = [] }) => {
+}> = async (app, { auth, store, announcements, svc, push, adminToken = '', ownerEmails = [] }) => {
   const guard = async (req: { headers: { authorization?: string } }) => {
     await auth.requireOwner(req.headers.authorization)
   }
@@ -349,6 +351,58 @@ export const adminRoutes: FastifyPluginAsync<{
     async req => {
       if (!(await store.adminDeleteComment(req.params.id))) throw new NotFoundError('Komentar tidak ditemukan')
       return { data: { deleted: true } }
+    }
+  )
+
+  // ---- push notification ----
+  app.get('/admin/push', { onRequest: guard, config: strict, schema: { hide: true } }, async () => ({
+    data: { configured: push.configured, settings: await store.pushSettings(), log: await store.pushLog(30) }
+  }))
+
+  app.put<{ Body: { enabled?: boolean; newChapter?: boolean } }>(
+    '/admin/push',
+    {
+      onRequest: guard,
+      config: strict,
+      schema: { hide: true, body: { type: 'object', additionalProperties: false, properties: { enabled: { type: 'boolean' }, newChapter: { type: 'boolean' } } } }
+    },
+    async req => {
+      const settings = await store.savePushSettings(req.body)
+      push.invalidate()
+      return { data: { configured: push.configured, settings, log: await store.pushLog(30) } }
+    }
+  )
+
+  app.post<{ Body: { title: string; body?: string; seriesId?: string } }>(
+    '/admin/push/send',
+    {
+      onRequest: guard,
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+      schema: {
+        hide: true,
+        body: {
+          type: 'object',
+          required: ['title'],
+          additionalProperties: false,
+          properties: {
+            title: { type: 'string', minLength: 1, maxLength: 65 },
+            body: { type: 'string', maxLength: 240 },
+            seriesId: { type: 'string', maxLength: 300 }
+          }
+        }
+      }
+    },
+    async req => {
+      const title = req.body.title.trim()
+      if (!title) throw new ValidationError('title tidak boleh kosong')
+      const seriesId = req.body.seriesId?.trim() || null
+      if (seriesId && !/^[a-z]+:[^\s/\\?#]+$/i.test(seriesId)) throw new ValidationError('seriesId harus berformat "<provider>:<id>"')
+      try {
+        await push.broadcast({ title, body: (req.body.body ?? '').trim(), seriesId })
+      } catch (e) {
+        throw new ValidationError((e as Error).message)
+      }
+      return { data: { sent: true, log: await store.pushLog(30) } }
     }
   )
 

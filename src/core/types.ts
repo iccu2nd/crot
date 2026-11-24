@@ -106,6 +106,8 @@ export interface Store {
   syncProviders(list: { key: string; name: string; baseUrl: string }[]): Promise<void>
   saveSummaries(items: SeriesSummary[]): Promise<void>
   saveDetail(d: SeriesDetail): Promise<void>
+  /** Dipanggil setelah saveDetail bila ada chapter yang BARU masuk ke seri yang sudah punya chapter (bukan impor pertama). */
+  onNewChapters?(fn: (series: { id: string; title: string }, chapters: ChapterSummary[]) => Promise<void> | void): void
   /** Detail lengkap (dengan chapter) dari data tersimpan; null jika belum pernah diambil / belum ada chapter. */
   detailLocal(provider: ProviderKey, ref: string): Promise<SeriesDetail | null>
   findSeries(provider: ProviderKey, ref: string): Promise<{ title: string; normTitle: string } | null>

@@ -14,6 +14,7 @@ export class Warmer {
   private crawlTimer?: NodeJS.Timeout
   private stopped = false
   private runs = 0
+  private readonly seen = new Map<string, string | null>()
 
   constructor(
     private readonly svc: ScraperService,
@@ -24,6 +25,8 @@ export class Warmer {
       intervalMs: number
       enrich: number
       maintainEvery?: number
+      /** Seri yang `latestChapter`-nya berubah di daftar latest langsung diambil ulang (memicu push chapter baru). */
+      watchNew?: boolean
       crawl?: { pages: number; size: number; firstDelayMs: number; everyMs: number; enrich: number; seeds: string[] }
     }
   ) {}
@@ -130,6 +133,23 @@ export class Warmer {
     )
   }
 
+  /** Bandingkan `latestChapter` dengan putaran sebelumnya; yang berubah diambil ulang (force) supaya chapter baru tersimpan & ter-push. Putaran pertama hanya mencatat. */
+  private async watch(items?: Array<{ id: string; latestChapter: string | null }>) {
+    for (const s of items ?? []) {
+      if (this.stopped) return
+      const prev = this.seen.get(s.id)
+      this.seen.set(s.id, s.latestChapter)
+      if (prev === undefined || prev === s.latestChapter) continue
+      try {
+        const { provider, ref } = parseId(s.id)
+        await this.svc.refreshDetail(provider, ref, true)
+      } catch {
+        /* gagal = dicoba lagi di perubahan berikutnya */
+      }
+    }
+    if (this.seen.size > 2000) this.seen.clear()
+  }
+
   /** Genre dasar halaman 1 (query yang sama dengan pill Home) — dijalankan tiap putaran agar pill Home selalu cache-hit. */
   private async warmGenres() {
     for (const slug of ['action', 'romance', 'fantasy', 'comedy', 'drama', 'isekai', 'adventure', 'horror']) {
@@ -146,7 +166,8 @@ export class Warmer {
     // Pemeliharaan (enrich detail + prune) cukup tiap beberapa putaran.
     if ((this.runs - 1) % (this.cfg.maintainEvery ?? 1) !== 0) return
     for (const provider of this.providers) {
-      await this.svc.latest({ page: 1, limit: 20, provider }).catch(e => this.log.warn({ provider, err: (e as Error).message }, 'warm latest failed'))
+      const r = await this.svc.latest({ page: 1, limit: 20, provider }).catch(e => (this.log.warn({ provider, err: (e as Error).message }, 'warm latest failed'), null))
+      if (this.cfg.watchNew) await this.watch(r?.data)
     }
     try {
       for (const { provider, ref } of await this.store.needingDetail(this.cfg.enrich)) {

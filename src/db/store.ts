@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg'
-import type { ChapterContent, DbPage, GenreFilters, GenreRow, SortKey, ProviderKey, SeriesDetail, SeriesSummary, SeriesStatus, SourceRef, Store } from '../core/types.js'
+import type { ChapterContent, ChapterSummary, DbPage, GenreFilters, GenreRow, SortKey, ProviderKey, SeriesDetail, SeriesSummary, SeriesStatus, SourceRef, Store } from '../core/types.js'
 import { normTitle, slugify } from '../core/util.js'
 
 type Row = Record<string, any>
@@ -83,7 +83,13 @@ const genrePairs = (names: string[]) => {
 const dedupe = <T>(items: T[], key: (t: T) => string) => [...new Map(items.map(i => [key(i), i])).values()]
 
 export class PgStore implements Store {
+  private newChaptersCb?: (series: { id: string; title: string }, chapters: ChapterSummary[]) => Promise<void> | void
+
   constructor(private readonly pool: Pool) {}
+
+  onNewChapters(fn: (series: { id: string; title: string }, chapters: ChapterSummary[]) => Promise<void> | void) {
+    this.newChaptersCb = fn
+  }
 
   private async tx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
     const c = await this.pool.connect()
@@ -161,6 +167,7 @@ export class PgStore implements Store {
 
   async saveDetail(d: SeriesDetail) {
     const ref = d.id.slice(d.provider.length + 1)
+    let added: ChapterSummary[] = []
     await this.tx(async c => {
       const { rows } = await c.query<Row>(UPSERT_DETAIL, [
         d.provider, ref, d.title, normTitle(d.title), d.cover, d.url, d.type, d.status,
@@ -184,6 +191,10 @@ export class PgStore implements Store {
       }
 
       const chapters = dedupe(d.chapters, ch => ch.id)
+      if (chapters.length && this.newChaptersCb) {
+        const known = new Set((await c.query<Row>('SELECT ref FROM chapters WHERE series_id = $1', [id])).rows.map(r => r.ref as string))
+        if (known.size > 0) added = chapters.filter(ch => !known.has(ch.id.slice(d.provider.length + 1)))
+      }
       if (chapters.length) {
         const n = (s: string) => (Number.isFinite(parseFloat(s)) ? parseFloat(s) : null)
         await c.query(UPSERT_CHAPTERS, [
@@ -196,6 +207,9 @@ export class PgStore implements Store {
         ])
       }
     })
+    if (added.length > 0 && added.length <= 5 && this.newChaptersCb) {
+      await Promise.race([Promise.resolve(this.newChaptersCb({ id: d.id, title: d.title }, added)).catch(() => undefined), new Promise(r => setTimeout(r, 3000))])
+    }
   }
 
   async detailLocal(provider: ProviderKey, ref: string): Promise<SeriesDetail | null> {
@@ -468,6 +482,30 @@ export class PgStore implements Store {
   }
 
   // ---- Admin: kontrol penuh atas data di DB ----
+
+  async pushSettings() {
+    const { rows } = await this.pool.query<Row>('SELECT enabled, new_chapter FROM push_settings WHERE id = 1')
+    return { enabled: rows[0]?.enabled ?? true, newChapter: rows[0]?.new_chapter ?? true }
+  }
+
+  async savePushSettings(p: { enabled?: boolean; newChapter?: boolean }) {
+    await this.pool.query(
+      `INSERT INTO push_settings (id, enabled, new_chapter) VALUES (1, COALESCE($1, true), COALESCE($2, true))
+       ON CONFLICT (id) DO UPDATE SET enabled = COALESCE($1, push_settings.enabled), new_chapter = COALESCE($2, push_settings.new_chapter), updated_at = now()`,
+      [p.enabled ?? null, p.newChapter ?? null]
+    )
+    return this.pushSettings()
+  }
+
+  async logPush(e: { kind: string; title: string; body: string; seriesId: string | null; ok: boolean; error: string | null }) {
+    await this.pool.query('INSERT INTO push_log (kind, title, body, series_id, ok, error) VALUES ($1, $2, $3, $4, $5, $6)', [e.kind, e.title, e.body, e.seriesId, e.ok, e.error])
+    await this.pool.query('DELETE FROM push_log WHERE id NOT IN (SELECT id FROM push_log ORDER BY id DESC LIMIT 100)')
+  }
+
+  async pushLog(limit = 30) {
+    const { rows } = await this.pool.query<Row>('SELECT kind, title, body, series_id, ok, error, created_at FROM push_log ORDER BY id DESC LIMIT $1', [limit])
+    return rows.map(r => ({ kind: r.kind as string, title: r.title as string, body: r.body as string, seriesId: (r.series_id as string | null) ?? null, ok: r.ok as boolean, error: (r.error as string | null) ?? null, createdAt: new Date(r.created_at).getTime() }))
+  }
 
   async adminStats() {
     const { rows } = await this.pool.query<Row>(`

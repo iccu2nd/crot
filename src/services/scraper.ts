@@ -463,8 +463,8 @@ export class ScraperService {
   }
 
   /** Dipakai warmer: isi cache + DB tanpa menghitung view dan tanpa fallback. */
-  async refreshDetail(provider: ProviderKey, ref: string): Promise<void> {
-    await this.detailFrom(this.adapter(provider), ref)
+  async refreshDetail(provider: ProviderKey, ref: string, force = false): Promise<void> {
+    await this.detailFrom(this.adapter(provider), ref, force)
   }
 
   /** Seri yang sama di provider lain: dari DB (norm_title), jika kosong cari lewat search provider lain. */

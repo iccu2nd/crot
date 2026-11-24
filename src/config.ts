@@ -17,6 +17,8 @@ export const config = {
   databaseUrl: env.DATABASE_URL ?? 'postgres://scraper:scraper@localhost:5432/scraper',
   redisUrl: env.REDIS_URL ?? 'redis://localhost:6379',
   adminToken: env.ADMIN_TOKEN ?? '',
+  /** Push realtime (FCM): isi FIREBASE_SERVICE_ACCOUNT dengan JSON service account (mentah atau base64). Kosong = push nonaktif. */
+  firebaseServiceAccount: env.FIREBASE_SERVICE_ACCOUNT ?? '',
   /** Akun & login. JWT_SECRET wajib diisi di produksi; Google aktif hanya bila GOOGLE_CLIENT_ID diisi. */
   auth: {
     jwtSecret: env.JWT_SECRET ?? '',
