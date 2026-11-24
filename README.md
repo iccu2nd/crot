@@ -56,7 +56,7 @@ Id unified: `<provider>:<id asli>` (`shinigami:<uuid>`, `lumos:<slug>`; chapter 
 - **Verified:** email di `OWNER_EMAILS` otomatis verified + akses admin saat masuk Google.
 
 ### Admin
-Aktif bila `ADMIN_TOKEN` diisi (tidak tampil di `/docs`, 10 request/menit): pengumuman (`POST/DELETE /admin/announcements`, header `x-admin-token`) dan moderasi pengguna/komentar/seri untuk owner (`/admin/users`, `/admin/comments`, ...). Akun owner tidak bisa diblokir/dibisukan/dihapus.
+Aktif bila `ADMIN_TOKEN` diisi (tidak tampil di `/docs`, 10 request/menit): pengumuman (`POST/DELETE /admin/announcements`, header `x-admin-token`) dan moderasi pengguna/komentar/seri untuk owner (`/admin/users`, `/admin/comments`, ...). Akun owner tidak bisa diblokir/dibisukan/dihapus. Paksa keluar sesi: `POST /admin/users/:id/logout` (satu user) dan `POST /admin/logout-all` (semua user; admin pemanggil tetap masuk, kirim `{"includeSelf":true}` untuk ikut keluar).
 
 ## Cara kerja singkat
 - **Cache:** L1 di memori + Redis, stale-while-revalidate + singleflight; Redis mati = cache dilewati, API tetap jalan. Respons gzip + ETag + `Cache-Control`/`s-maxage`. Rate limit di memori (300/menit per IP).

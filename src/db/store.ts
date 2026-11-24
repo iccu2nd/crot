@@ -846,6 +846,21 @@ export class PgStore implements Store {
     return (rowCount ?? 0) > 0 ? this.adminGetUser(userId, ownerEmails) : null
   }
 
+  /** Cabut semua sesi/token satu user (token_version + 1). null bila user tidak ada. */
+  async adminRevokeUserSessions(userId: number): Promise<boolean> {
+    const { rowCount } = await this.pool.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [userId])
+    return (rowCount ?? 0) > 0
+  }
+
+  /** Cabut semua sesi SEMUA user. `exceptUserId` dilewati supaya admin pemanggil tetap masuk. Mengembalikan jumlah akun terdampak. */
+  async adminRevokeAllSessions(exceptUserId?: number): Promise<number> {
+    const { rowCount } = await this.pool.query(
+      'UPDATE users SET token_version = token_version + 1 WHERE ($1::int IS NULL OR id <> $1::int)',
+      [exceptUserId ?? null]
+    )
+    return rowCount ?? 0
+  }
+
   /** Hapus semua komentar & balasan milik user (suara & balasan orang lain pada komentar itu ikut terhapus). */
   async adminDeleteUserComments(userId: number) {
     const { rowCount } = await this.pool.query('DELETE FROM comments WHERE user_id = $1', [userId])

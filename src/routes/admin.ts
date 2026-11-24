@@ -300,6 +300,31 @@ export const adminRoutes: FastifyPluginAsync<{
     }
   )
 
+  /** Paksa keluar satu user dari semua perangkat (cabut semua token miliknya). */
+  app.post<{ Params: { id: number } }>(
+    '/admin/users/:id/logout',
+    { onRequest: guard, config: { rateLimit: { max: 30, timeWindow: '1 minute' } }, schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } } },
+    async req => {
+      if (!(await store.adminRevokeUserSessions(req.params.id))) throw new NotFoundError('User tidak ditemukan')
+      return { data: { revoked: true } }
+    }
+  )
+
+  /** Paksa keluar SEMUA user. Akun admin pemanggil tetap masuk, kecuali `includeSelf: true`. */
+  app.post<{ Body: { includeSelf?: boolean } | undefined }>(
+    '/admin/logout-all',
+    {
+      onRequest: guard,
+      config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+      schema: { hide: true, body: { type: ['object', 'null'], additionalProperties: false, properties: { includeSelf: { type: 'boolean' } } } }
+    },
+    async req => {
+      const me = await auth.requireOwner(req.headers.authorization)
+      const revoked = await store.adminRevokeAllSessions(req.body?.includeSelf ? undefined : me.id)
+      return { data: { revoked } }
+    }
+  )
+
   app.delete<{ Params: { id: number } }>(
     '/admin/users/:id/comments',
     { onRequest: guard, config: { rateLimit: { max: 20, timeWindow: '1 minute' } }, schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } } },
