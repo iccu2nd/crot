@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { Pool } from 'pg'
 import type { Config } from '../config.js'
-import { levelFor } from '../core/xp.js'
+import { levelFor, streakOf, type Streak } from '../core/xp.js'
 import { USERNAME_MSG, USERNAME_RE, formatCooldown, signToken, slugUsername, verifyToken } from '../core/auth.js'
 import { AppError, ConflictError, NotConfiguredError, NotFoundError, UnauthorizedError, ValidationError } from '../core/errors.js'
 
@@ -55,6 +55,8 @@ interface PublicProfile {
   premium: boolean
   /** pemilik menyembunyikan daftar "Sedang dibaca" */
   readingHidden: boolean
+  /** streak membaca; null bila pemilik menyembunyikan aktivitas bacanya */
+  streak: Streak | null
 }
 interface AuthResult {
   token: string
@@ -247,7 +249,8 @@ export class AuthService {
     const { rows } = await this.pool.query(
       `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.premium, u.verified_hidden, u.reading_hidden, u.created_at AS "createdAt",
               CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
-              (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount"
+              (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount",
+              COALESCE((SELECT array_agg(to_char(d.day, 'YYYY-MM-DD') ORDER BY d.day DESC) FROM (SELECT day FROM read_days WHERE user_id = u.id ORDER BY day DESC LIMIT 1000) d), '{}') AS "readDays"
          FROM users u WHERE u.id = $1`,
       [userId]
     )
@@ -269,7 +272,8 @@ export class AuthService {
       verified: (r.verified === true || isOwner) && r.verified_hidden !== true, // disembunyikan pemiliknya = tidak tampil publik
       isOwner,
       premium: r.premium === true,
-      readingHidden: r.reading_hidden === true
+      readingHidden: r.reading_hidden === true,
+      streak: r.reading_hidden === true ? null : streakOf((r.readDays as string[] | undefined) ?? [])
     }
   }
 
