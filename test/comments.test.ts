@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { checkTarget, cleanComment, isJpeg } from '../src/core/util.js'
 import { CommentService } from '../src/services/comments.js'
-import { XP_RULES, levelCost, levelFor, weekWindow } from '../src/core/xp.js'
+import { XP_RULES, levelCost, levelFor, streakOf, weekWindow } from '../src/core/xp.js'
 import { XpService } from '../src/services/xp.js'
 
 test('target komentar: seri & chapter valid, lainnya ditolak', () => {
@@ -211,10 +211,13 @@ test('XpService: ledger (sekali per ref + batas harian) dan validasi laporan dar
   let granted = true
   const svc = new XpService({ query: async (_sql: string, p: any[]) => (calls.push(p), { rows: granted ? [{ id: p[0] }] : [] }) } as any)
   assert.equal(await svc.report(7, 'read', 'lumos:bab-1'), XP_RULES.read.xp)
-  assert.deepEqual(calls[0].slice(0, 3), [7, 'read', 'lumos:bab-1'])
-  assert.deepEqual(calls[0].slice(3), [XP_RULES.read.xp, XP_RULES.read.perDay])
+  assert.deepEqual(calls[0], [7]) // hari baca dicatat dulu (untuk streak)
+  assert.deepEqual(calls[1].slice(0, 3), [7, 'read', 'lumos:bab-1'])
+  assert.deepEqual(calls[1].slice(3), [XP_RULES.read.xp, XP_RULES.read.perDay])
   granted = false
+  const before = calls.length
   assert.equal(await svc.report(7, 'read', 'lumos:bab-1'), 0) // sudah pernah / kuota habis
+  assert.equal(calls.length - before, 2, 'streak tetap dicatat walau XP 0')
   granted = true
   await svc.report(7, 'daily', undefined)
   assert.match(calls.at(-1)[2], /^\d{4}-\d{2}-\d{2}$/) // ref = tanggal WIB
@@ -258,4 +261,29 @@ test('leaderboard: urutan, tanpa email bocor, posisi sendiri di luar limit', asy
   const anon = await new XpService(pool as never).leaderboard(null, 2)
   assert.equal(anon.me, null)
   assert.equal((await new XpService({ query: async () => ({ rows: [] }) } as never).leaderboard(1)).total, 0)
+})
+
+
+test('streakOf: berturut-turut, masih hidup bila baru kemarin, putus bila lebih lama', () => {
+  const now = Date.parse('2026-11-25T02:00:00Z') // 25 Nov 09.00 WIB
+  assert.deepEqual(streakOf([], now), { current: 0, readToday: false })
+  assert.deepEqual(streakOf(['2026-11-25', '2026-11-24', '2026-11-23'], now), { current: 3, readToday: true })
+  // belum baca hari ini, tapi kemarin & sebelumnya baca -> streak masih hidup
+  assert.deepEqual(streakOf(['2026-11-24', '2026-11-23'], now), { current: 2, readToday: false })
+  // lompat satu hari -> hanya runtutan terakhir
+  assert.deepEqual(streakOf(['2026-11-25', '2026-11-23', '2026-11-22'], now), { current: 1, readToday: true })
+  // terakhir baca 2 hari lalu -> putus
+  assert.deepEqual(streakOf(['2026-11-23', '2026-11-22'], now), { current: 0, readToday: false })
+  // duplikat & urutan acak tidak masalah
+  assert.deepEqual(streakOf(['2026-11-23', '2026-11-25', '2026-11-24', '2026-11-24'], now), { current: 3, readToday: true })
+  // hari WIB: 23.30 UTC tanggal 24 sudah 06.30 WIB tanggal 25
+  assert.deepEqual(streakOf(['2026-11-24'], Date.parse('2026-11-24T23:30:00Z')), { current: 1, readToday: false })
+  assert.deepEqual(streakOf(['2026-11-25'], Date.parse('2026-11-24T23:30:00Z')), { current: 1, readToday: true })
+})
+
+test('XpService.streak membaca read_days milik pengguna', async () => {
+  let args: any[] = []
+  const svc = new XpService({ query: async (_s: string, p: any[]) => (args = p, { rows: [{ d: '2026-11-24' }, { d: '2026-11-23' }] }) } as any)
+  assert.deepEqual(await svc.streak(9, Date.parse('2026-11-25T02:00:00Z')), { current: 2, readToday: false })
+  assert.deepEqual(args, [9])
 })

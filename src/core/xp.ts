@@ -60,3 +60,26 @@ export function weekWindow(now = Date.now()): WeekWindow {
   const start = dayStart - sinceMonday * DAY_MS
   return { startDay: new Date(start).toISOString().slice(0, 10), startAt: start - WIB_MS, endAt: start + 7 * DAY_MS - WIB_MS }
 }
+
+export interface Streak {
+  /** jumlah hari berturut-turut membaca; tetap dihitung bila kemarin membaca & hari ini belum (masih bisa diselamatkan) */
+  current: number
+  /** sudah membaca hari ini (WIB) */
+  readToday: boolean
+}
+
+/**
+ * Streak membaca dari daftar hari (WIB, "YYYY-MM-DD", urutan bebas). Murni, mudah diuji.
+ * Hari ini sudah baca -> hitung mundur dari hari ini; belum tapi kemarin baca -> hitung mundur dari kemarin;
+ * selain itu streak putus (0).
+ */
+export function streakOf(days: readonly string[], now = Date.now()): Streak {
+  const toDay = (d: string) => Math.floor(Date.parse(`${d}T00:00:00Z`) / DAY_MS)
+  const set = new Set(days.map(toDay).filter(Number.isFinite))
+  const today = Math.floor((now + WIB_MS) / DAY_MS)
+  const readToday = set.has(today)
+  let d = readToday ? today : today - 1
+  let current = 0
+  while (set.has(d)) { current++; d-- }
+  return { current, readToday }
+}

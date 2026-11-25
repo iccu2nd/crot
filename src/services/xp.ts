@@ -1,7 +1,7 @@
 import type { Pool } from 'pg'
 import { ValidationError } from '../core/errors.js'
 import { PROVIDER_KEYS, type ProviderKey } from '../core/types.js'
-import { CLIENT_KINDS, XP_RULES, levelFor, weekWindow, type XpKind } from '../core/xp.js'
+import { CLIENT_KINDS, XP_RULES, levelFor, streakOf, weekWindow, type Streak, type XpKind } from '../core/xp.js'
 
 const REF_RE = /^[a-z0-9_-]{2,20}:[^\s]{1,300}$/i
 /** Tanggal hari ini di WIB (UTC+7), dipakai sebagai ref untuk bonus harian. */
@@ -42,7 +42,25 @@ export class XpService {
     const kind = type as (typeof CLIENT_KINDS)[number]
     if (kind === 'daily') return this.award(userId, 'daily', wibDay())
     if (typeof ref !== 'string' || !REF_RE.test(ref) || !PROVIDER_KEYS.includes(ref.split(':')[0] as ProviderKey)) throw new ValidationError('Referensi tidak valid')
+    if (kind === 'read') await this.markReadDay(userId) // streak naik walau XP-nya 0 (chapter lama / kuota habis)
     return this.award(userId, kind, ref)
+  }
+
+  /** Catat bahwa pengguna membaca hari ini (WIB); aman dipanggil berulang. */
+  private async markReadDay(userId: number): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO read_days (user_id, day) VALUES ($1::int, (now() AT TIME ZONE 'Asia/Jakarta')::date) ON CONFLICT DO NOTHING`,
+      [userId]
+    )
+  }
+
+  /** Streak membaca pengguna saat ini. */
+  async streak(userId: number, now = Date.now()): Promise<Streak> {
+    const { rows } = await this.pool.query(
+      `SELECT to_char(day, 'YYYY-MM-DD') AS d FROM read_days WHERE user_id = $1::int ORDER BY day DESC LIMIT 1000`,
+      [userId]
+    )
+    return streakOf(rows.map((r: { d: string }) => r.d), now)
   }
 
   /**
