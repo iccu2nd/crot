@@ -14,6 +14,7 @@ import { adminRoutes } from './routes/admin.js'
 import { announcementRoutes } from './routes/announcements.js'
 import { authRoutes } from './routes/auth.js'
 import { catalogRoutes } from './routes/catalog.js'
+import { chatRoutes } from './routes/chat.js'
 import { commentRoutes } from './routes/comments.js'
 import { libraryRoutes } from './routes/library.js'
 import { notificationRoutes } from './routes/notifications.js'
@@ -23,6 +24,7 @@ import { systemRoutes } from './routes/system.js'
 import { xpRoutes } from './routes/xp.js'
 import { AnnouncementRepo } from './services/announcements.js'
 import { AuthService } from './services/auth.js'
+import { ChatService } from './services/chat.js'
 import { CommentService } from './services/comments.js'
 import { LibraryService } from './services/library.js'
 import { NotificationService } from './services/notifications.js'
@@ -140,6 +142,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   const auth = new AuthService(pool, cfg.auth, log)
   const xp = new XpService(pool, cfg.auth.ownerEmails)
   const comments = new CommentService(pool, xp, cfg.auth.ownerEmails)
+  const chat = new ChatService(pool, cfg.auth.ownerEmails)
   const reading = new ReadingService(pool)
   const announcements = new AnnouncementRepo(pool)
 
@@ -182,6 +185,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
       await v1.register(seriesRoutes, { svc })
       await v1.register(authRoutes, { auth })
       await v1.register(commentRoutes, { auth, comments })
+      await v1.register(chatRoutes, { auth, chat })
       await v1.register(xpRoutes, { auth, xp })
       await v1.register(readingRoutes, { auth, reading })
       await v1.register(libraryRoutes, { auth, library: new LibraryService(pool) })
