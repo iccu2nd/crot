@@ -206,7 +206,7 @@ export const adminRoutes: FastifyPluginAsync<{
   )
 
   // ---- users ----
-  app.get<{ Querystring: { q?: string; filter?: string; page?: number; limit?: number } }>(
+  app.get<{ Querystring: { q?: string; filter?: string; sort?: string; page?: number; limit?: number } }>(
     '/admin/users',
     {
       onRequest: guard,
@@ -217,7 +217,8 @@ export const adminRoutes: FastifyPluginAsync<{
           type: 'object',
           properties: {
             q: { type: 'string', maxLength: 200 },
-            filter: { type: 'string', enum: ['', 'banned', 'muted', 'verified', 'premium', 'avatar'] },
+            filter: { type: 'string', enum: ['', 'banned', 'muted', 'verified', 'premium', 'avatar', 'owner'] },
+            sort: { type: 'string', enum: ['', 'new', 'xp'] },
             page: { type: 'integer', minimum: 1, default: 1 },
             limit: { type: 'integer', minimum: 1, maximum: 100, default: 30 }
           }
@@ -230,6 +231,7 @@ export const adminRoutes: FastifyPluginAsync<{
       const data = await store.adminListUsers({
         q: req.query.q?.trim() || undefined,
         filter: req.query.filter || undefined,
+        sort: req.query.sort || undefined,
         limit,
         offset: (page - 1) * limit,
         ownerEmails
@@ -288,6 +290,52 @@ export const adminRoutes: FastifyPluginAsync<{
         throw e
       }
     }
+  )
+
+  /** Atur level / EXP user: kirim tepat satu dari `xp` (nilai total), `level`, atau `delta` (+/-). Balasan = user terbaru. */
+  app.patch<{ Params: { id: number }; Body: { xp?: number; level?: number; delta?: number } }>(
+    '/admin/users/:id/xp',
+    {
+      onRequest: guard,
+      config: strict,
+      schema: {
+        hide: true,
+        params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] },
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            xp: { type: 'integer', minimum: 0, maximum: 100000000 },
+            level: { type: 'integer', minimum: 1, maximum: 10000 },
+            delta: { type: 'integer', minimum: -100000000, maximum: 100000000 }
+          }
+        }
+      }
+    },
+    async req => {
+      try {
+        const row = await store.adminSetXp(req.params.id, req.body, ownerEmails)
+        if (!row) throw new NotFoundError('User tidak ditemukan')
+        return { data: row }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('status:')) throw new ValidationError(e.message.slice(7).trim())
+        throw e
+      }
+    }
+  )
+
+  // ---- global chat ----
+  app.delete(
+    '/admin/chat',
+    { onRequest: guard, config: { rateLimit: { max: 10, timeWindow: '1 minute' } }, schema: { hide: true } },
+    async () => ({ data: { deleted: await store.adminClearChat() } })
+  )
+
+  app.delete<{ Params: { id: number } }>(
+    '/admin/users/:id/chat',
+    { onRequest: guard, config: { rateLimit: { max: 20, timeWindow: '1 minute' } }, schema: { hide: true, params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } } },
+    async req => ({ data: { deleted: await store.adminDeleteUserChat(req.params.id) } })
   )
 
   app.delete<{ Params: { id: number } }>(

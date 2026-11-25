@@ -22,6 +22,14 @@ export const CLIENT_KINDS = ['read', 'bookmark', 'daily'] as const
  */
 export const levelCost = (level: number): number => 40 + 15 * (level - 1) + (level - 1) ** 2
 
+/** Total XP minimum untuk mencapai level tertentu (kebalikan [levelFor]); level 1 = 0 XP. */
+export function xpForLevel(level: number): number {
+  const target = Math.max(1, Math.min(10000, Math.floor(Number(level) || 1)))
+  let total = 0
+  for (let l = 1; l < target; l++) total += levelCost(l)
+  return total
+}
+
 interface LevelInfo {
   level: number
   /** XP yang sudah terkumpul di level ini */

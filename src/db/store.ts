@@ -1,3 +1,4 @@
+import { levelFor, xpForLevel } from '../core/xp.js'
 import type { Pool, PoolClient } from 'pg'
 import type { ChapterContent, ChapterSummary, DbPage, GenreFilters, GenreRow, SortKey, ProviderKey, SeriesDetail, SeriesSummary, SeriesStatus, SourceRef, Store } from '../core/types.js'
 import { normTitle, slugify } from '../core/util.js'
@@ -761,6 +762,7 @@ export class PgStore implements Store {
       displayName: (r.displayName ?? '') as string,
       bio: (r.bio ?? '') as string,
       xp: Number(r.xp ?? 0),
+      level: levelFor(Number(r.xp ?? 0)).level,
       verified: r.verified === true || (!!email && ownerEmails.includes(email)), // owner otomatis terverifikasi
       premium: r.premium === true,
       avatarV: Number(r.avatarV ?? 0),
@@ -776,7 +778,7 @@ export class PgStore implements Store {
   }
 
   /** `filter`: banned | muted | verified | premium | avatar (punya foto) — kosong = semua. */
-  async adminListUsers(opts: { q?: string; filter?: string; limit: number; offset: number; ownerEmails?: string[] }) {
+  async adminListUsers(opts: { q?: string; filter?: string; sort?: string; limit: number; offset: number; ownerEmails?: string[] }) {
     const params: unknown[] = []
     const where: string[] = []
     if (opts.q) {
@@ -788,12 +790,13 @@ export class PgStore implements Store {
     else if (opts.filter === 'verified') where.push('u.verified = true')
     else if (opts.filter === 'premium') where.push('u.premium = true')
     else if (opts.filter === 'avatar') where.push('u.avatar IS NOT NULL')
+    else if (opts.filter === 'owner' && opts.ownerEmails?.length) { params.push(opts.ownerEmails); where.push(`lower(u.email) = ANY($${params.length}::text[])`) }
     const w = where.length ? `WHERE ${where.join(' AND ')}` : ''
     params.push(opts.limit, opts.offset)
     const { rows } = await this.pool.query<Row>(
       `SELECT ${PgStore.ADMIN_USER_COLS}, (u.avatar IS NOT NULL) AS "hasAvatar"
        FROM users u ${w}
-       ORDER BY u.id DESC
+       ORDER BY ${opts.sort === 'xp' ? 'u.xp DESC, u.id DESC' : 'u.id DESC'}
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     )
@@ -838,6 +841,37 @@ export class PgStore implements Store {
     if (p.clearName) sets.push('display_name = NULL')
     if (sets.length) await this.pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = $1`, params)
     return this.adminGetUser(userId, ownerEmails)
+  }
+
+  /**
+   * Atur XP/level user. Tepat satu dari: `xp` (nilai total), `level` (XP minimum level itu), `delta` (tambah/kurang).
+   * Hasil dibatasi 0..XP_MAX. Buku besar `xp_events` (papan peringkat mingguan) tidak diubah.
+   */
+  async adminSetXp(userId: number, p: { xp?: number; level?: number; delta?: number }, ownerEmails: string[] = []) {
+    const XP_MAX = 100_000_000
+    const given = [p.xp, p.level, p.delta].filter(v => v !== undefined).length
+    if (given !== 1) throw new Error('status: isi salah satu: xp, level, atau delta')
+    const cur = await this.adminGetUser(userId, ownerEmails)
+    if (!cur) return null
+    let next: number
+    if (p.xp !== undefined) next = p.xp
+    else if (p.level !== undefined) next = xpForLevel(p.level)
+    else next = cur.xp + (p.delta as number)
+    next = Math.max(0, Math.min(XP_MAX, Math.floor(next)))
+    await this.pool.query('UPDATE users SET xp = $2 WHERE id = $1', [userId, next])
+    return this.adminGetUser(userId, ownerEmails)
+  }
+
+  /** Hapus SEMUA pesan Global Chat. Mengembalikan jumlah pesan yang terhapus. */
+  async adminClearChat(): Promise<number> {
+    const { rowCount } = await this.pool.query('DELETE FROM chat_messages')
+    return rowCount ?? 0
+  }
+
+  /** Hapus semua pesan Global Chat milik satu user. */
+  async adminDeleteUserChat(userId: number): Promise<number> {
+    const { rowCount } = await this.pool.query('DELETE FROM chat_messages WHERE user_id = $1', [userId])
+    return rowCount ?? 0
   }
 
   /** Hapus foto profil user (avatar_v dinaikkan supaya cache app/Coil ikut basi). */
