@@ -141,7 +141,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
 
   const auth = new AuthService(pool, cfg.auth, log)
   const xp = new XpService(pool, cfg.auth.ownerEmails)
-  const comments = new CommentService(pool, xp, cfg.auth.ownerEmails)
+  const comments = new CommentService(pool, xp, cfg.auth.ownerEmails, push)
   const chat = new ChatService(pool, cfg.auth.ownerEmails)
   const reading = new ReadingService(pool)
   const announcements = new AnnouncementRepo(pool)

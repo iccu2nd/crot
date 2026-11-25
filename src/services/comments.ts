@@ -72,7 +72,8 @@ export class CommentService {
   constructor(
     private readonly pool: Pool,
     private readonly xp?: XpService,
-    private readonly ownerEmails: string[] = []
+    private readonly ownerEmails: string[] = [],
+    private readonly push?: { commentReply(toUserId: number, p: { fromName: string; body: string; target: string; commentId: string; parentId: string }): Promise<void> }
   ) {}
 
   private item(r: any): CommentItem {
@@ -125,7 +126,47 @@ export class CommentService {
     const { rows } = await this.pool.query('INSERT INTO comments (target, user_id, body, parent_id, reply_to_user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id', [t, userId, text, parentId, replyToUser])
     await this.xp?.award(userId, 'comment', String(rows[0].id)).catch(() => 0)
     const full = await this.pool.query(`${select('$2')} WHERE c.id = $1`, [rows[0].id, userId])
-    return this.item(full.rows[0])
+    const item = this.item(full.rows[0])
+    // Push ke pemilik komentar yang dibalas (dan ke yang di-mention lewat reply-to), tanpa menunggu
+    if (parentId != null) {
+      void this.notifyReplyPush(userId, parentId, replyToUser, t, text, Number(rows[0].id))
+    }
+    return item
+  }
+
+  /** Kirim FCM ke topic user yang relevan. Kesalahan diabaikan agar komentar tetap berhasil. */
+  private async notifyReplyPush(
+    fromUserId: number,
+    parentId: number,
+    replyToUser: number | null,
+    target: string,
+    body: string,
+    commentId: number
+  ): Promise<void> {
+    if (!this.push) return
+    try {
+      const { rows: pr } = await this.pool.query('SELECT user_id FROM comments WHERE id = $1', [parentId])
+      const parentAuthor = Number(pr[0]?.user_id || 0)
+      const recipients = new Set<number>()
+      if (parentAuthor > 0 && parentAuthor !== fromUserId) recipients.add(parentAuthor)
+      if (replyToUser != null && replyToUser > 0 && replyToUser !== fromUserId) recipients.add(replyToUser)
+      if (recipients.size === 0) return
+      const { rows: ur } = await this.pool.query(
+        `SELECT COALESCE(NULLIF(display_name, ''), username) AS name FROM users WHERE id = $1`,
+        [fromUserId]
+      )
+      const fromName = String(ur[0]?.name || 'Seseorang')
+      const payload = {
+        fromName,
+        body: body.replace(/\s+/g, ' ').slice(0, 100),
+        target,
+        commentId: String(commentId),
+        parentId: String(parentId)
+      }
+      await Promise.all([...recipients].map(uid => this.push!.commentReply(uid, payload).catch(() => undefined)))
+    } catch {
+      /* push opsional */
+    }
   }
 
   /** Like (1), dislike (-1), atau batalkan (0). Penulis dapat XP kecil saat disukai orang lain. */

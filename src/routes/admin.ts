@@ -306,9 +306,9 @@ export const adminRoutes: FastifyPluginAsync<{
           additionalProperties: false,
           minProperties: 1,
           properties: {
-            xp: { type: 'integer', minimum: 0, maximum: 100000000 },
+            xp: { type: 'integer', minimum: 0, maximum: 400000000000 },
             level: { type: 'integer', minimum: 1, maximum: 10000 },
-            delta: { type: 'integer', minimum: -100000000, maximum: 100000000 }
+            delta: { type: 'integer', minimum: -400000000000, maximum: 400000000000 }
           }
         }
       }
