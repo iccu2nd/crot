@@ -3,18 +3,18 @@ import { test } from 'node:test'
 import { CHAT_KEEP, ChatService, cleanChat } from '../src/services/chat.js'
 
 function fakePool() {
-  const rows: { id: number; user_id: number; body: string; created_at: Date }[] = []
+  const rows: { id: number; user_id: number; body: string; created_at: Date; reply_to?: number | null; reply_user?: string | null; reply_body?: string | null }[] = []
   const users: Record<number, any> = { 1: { username: 'budi', xp: 100, email: 'own@x.id' }, 2: { username: 'andi', display_name: 'Andi S' } }
   let seq = 0
   let now = 1_700_000_000_000
-  const join = (c: any) => ({ id: c.id, body: c.body, created_at: c.created_at, uid: c.user_id, username: users[c.user_id].username, email: users[c.user_id].email,
+  const join = (c: any) => ({ id: c.id, body: c.body, created_at: c.created_at, reply_to: c.reply_to, reply_user: c.reply_user, reply_body: c.reply_body, uid: c.user_id, username: users[c.user_id].username, email: users[c.user_id].email,
     display_name: users[c.user_id].display_name, xp: users[c.user_id].xp ?? 0, avatar_v: 0 })
   return {
     rows, tick: (ms: number) => (now += ms),
     async query(sql: string, p: any[] = []) {
       if (sql.includes("interval '10 seconds'")) return { rows: [{ n: rows.filter(r => r.user_id === p[0] && r.created_at.getTime() > now - 10_000).length }] }
       if (sql.startsWith('INSERT INTO chat_messages')) {
-        const r = { id: ++seq, user_id: p[0], body: p[1], created_at: new Date(now) }
+        const r = { id: ++seq, user_id: p[0], body: p[1], created_at: new Date(now), reply_to: p[2], reply_user: p[3], reply_body: p[4] }
         rows.push(r)
         return { rows: [{ id: r.id }] }
       }
@@ -76,4 +76,17 @@ test('chat: hapus hanya milik sendiri, owner boleh hapus semua', async () => {
   await assert.rejects(svc.remove(2, false, a.id), /tidak ditemukan/)
   await svc.remove(2, true, a.id) // owner
   await assert.rejects(svc.remove(1, false, a.id), /tidak ditemukan/) // sudah hilang
+})
+
+test('chat: balasan menyimpan kutipan, tetap tampil walau pesan asli dihapus; balas pesan yang tak ada ditolak', async () => {
+  const pool = fakePool()
+  const svc = new ChatService(pool as any)
+  const a = await svc.add(2, 'halo\n\nsemua   apa kabar')
+  assert.equal(a.replyTo, null)
+  const b = await svc.add(1, 'baik', a.id)
+  assert.deepEqual(b.replyTo, { id: a.id, userName: 'Andi S', body: 'halo semua apa kabar' })
+  await svc.remove(2, false, a.id)
+  const list = await svc.list()
+  assert.equal(list[0].replyTo?.body, 'halo semua apa kabar')
+  await assert.rejects(svc.add(1, 'balas hantu', 9999), /sudah tidak ada/)
 })

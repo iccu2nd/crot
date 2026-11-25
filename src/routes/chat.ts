@@ -22,14 +22,15 @@ export const chatRoutes: FastifyPluginAsync<{ auth: AuthService; chat: ChatServi
   app.post(
     '/chat',
     {
-      schema: { tags: ['chat'], summary: 'Kirim pesan ke Global Chat (1–500 karakter) — wajib login. Pesan lama di luar 50 terakhir dihapus otomatis.', body: { type: 'object', required: ['body'], properties: { body: { type: 'string', maxLength: 2000 } } } },
+      schema: { tags: ['chat'], summary: 'Kirim pesan ke Global Chat (1–500 karakter; `replyTo` = id pesan yang dibalas, opsional) — wajib login. Pesan lama di luar 50 terakhir dihapus otomatis.', body: { type: 'object', required: ['body'], properties: { body: { type: 'string', maxLength: 2000 }, replyTo: { type: 'integer', minimum: 1, nullable: true } } } },
       config: limit(40)
     },
     async (req, reply) => {
       const user = await auth.me(req.headers.authorization)
       assertNotMuted(user)
       void reply.header('cache-control', 'no-store')
-      return { data: await chat.add(user.id, (req.body as { body: string }).body) }
+      const b = req.body as { body: string; replyTo?: number | null }
+      return { data: await chat.add(user.id, b.body, b.replyTo) }
     }
   )
 

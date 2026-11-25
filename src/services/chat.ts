@@ -8,15 +8,28 @@ export const MAX_CHAT = 500
 /** Maks. pesan per akun dalam 10 detik (rate limit per IP saja tidak cukup bila IP berganti-ganti / banyak user satu IP). */
 const BURST = 5
 
+/** Panjang cuplikan pesan yang disimpan pada kutipan balasan. */
+const QUOTE_LEN = 120
+
+export interface ChatReplyRef {
+  id: number
+  /** nama tampilan pengirim pesan yang dibalas */
+  userName: string
+  /** cuplikan isi pesan yang dibalas (maks. 120 karakter) */
+  body: string
+}
+
 export interface ChatItem {
   id: number
   body: string
   createdAt: number
+  /** null = pesan biasa */
+  replyTo: ChatReplyRef | null
   /** bentuk sama dengan `user` pada komentar, supaya app memakai lencana/level yang sama */
   user: { id: number; username: string; displayName: string; avatarV: number; level: number; verified: boolean; isOwner: boolean; premium: boolean }
 }
 
-const SELECT = `SELECT m.id, m.body, m.created_at, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, u.premium, u.verified_hidden,
+const SELECT = `SELECT m.id, m.body, m.created_at, m.reply_to, m.reply_user, m.reply_body, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, u.premium, u.verified_hidden,
                 CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v
                 FROM chat_messages m JOIN users u ON u.id = m.user_id`
 
@@ -46,6 +59,7 @@ export class ChatService {
       id: Number(r.id),
       body: r.body,
       createdAt: new Date(r.created_at).getTime(),
+      replyTo: r.reply_to != null ? { id: Number(r.reply_to), userName: r.reply_user ?? '', body: r.reply_body ?? '' } : null,
       user: {
         id: Number(r.uid), username: r.username, displayName: r.display_name ?? '', avatarV: Number(r.avatar_v ?? 0),
         level: levelFor(Number(r.xp ?? 0)).level, verified: (r.verified === true || isOwner) && r.verified_hidden !== true, isOwner, premium: r.premium === true
@@ -60,11 +74,22 @@ export class ChatService {
   }
 
   /** Kirim pesan, lalu langsung hapus semua pesan yang lebih lama dari `CHAT_KEEP` terbaru (tabel tak pernah membengkak). */
-  async add(userId: number, body: unknown): Promise<ChatItem> {
+  async add(userId: number, body: unknown, replyToId?: number | null): Promise<ChatItem> {
     const text = cleanChat(body)
     const recent = await this.pool.query("SELECT count(*)::int AS n FROM chat_messages WHERE user_id = $1 AND created_at > now() - interval '10 seconds'", [userId])
     if (Number(recent.rows[0]?.n ?? 0) >= BURST) throw new AppError(429, 'RATE_LIMITED', 'Terlalu cepat, tunggu sebentar sebelum mengirim lagi')
-    const { rows } = await this.pool.query('INSERT INTO chat_messages (user_id, body) VALUES ($1, $2) RETURNING id', [userId, text])
+    // Kutipan diambil dari pesan asli saat ini; bila pesan itu sudah dihapus/dipangkas, balasan ditolak.
+    let reply: ChatReplyRef | null = null
+    if (replyToId != null) {
+      const q = await this.pool.query(`${SELECT} WHERE m.id = $1`, [replyToId])
+      if (!q.rows[0]) throw new NotFoundError('Pesan yang dibalas sudah tidak ada')
+      const it = this.item(q.rows[0])
+      reply = { id: it.id, userName: it.user.displayName || it.user.username, body: it.body.replace(/\s+/g, ' ').slice(0, QUOTE_LEN) }
+    }
+    const { rows } = await this.pool.query(
+      'INSERT INTO chat_messages (user_id, body, reply_to, reply_user, reply_body) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [userId, text, reply?.id ?? null, reply?.userName ?? null, reply?.body ?? null]
+    )
     // Pemangkasan tak boleh menggagalkan pengiriman; bila gagal, list() tetap hanya memberi 50 dan pangkas berikutnya menyusul.
     await this.pool
       .query('DELETE FROM chat_messages WHERE id <= (SELECT id FROM chat_messages ORDER BY id DESC OFFSET $1 LIMIT 1)', [CHAT_KEEP])
