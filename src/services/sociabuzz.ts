@@ -51,7 +51,14 @@ export interface PaymentGateway {
   status(pendingUrl: string): Promise<{ status: SbStatus; title: string }>
 }
 
-const UA = 'Mozilla/5.0 (Linux; Android 13; SM-A057F) AppleWebKit/537.36'
+const UA =
+  'Mozilla/5.0 (Linux; Android 13; SM-A057F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
+
+/** Header standar browser; WAF Sociabuzz menolak request yang terlihat seperti bot. */
+const BROWSER_HEADERS: Record<string, string> = {
+  'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+  'cache-control': 'no-cache'
+}
 
 export const cleanAmount = (v: unknown): number => Number(String(v ?? '').replace(/[^\d]/g, ''))
 
@@ -91,6 +98,9 @@ class Session {
   get(name: string) {
     return this.jar.get(name)
   }
+  names() {
+    return this.jar.keys()
+  }
 
   private absorb(res: Response) {
     const h = res.headers as Headers & { getSetCookie?: () => string[] }
@@ -113,7 +123,7 @@ class Session {
         body,
         redirect: 'manual',
         signal: AbortSignal.timeout(this.timeoutMs),
-        headers: { 'user-agent': UA, ...(init.headers ?? {}), ...(cookie ? { cookie } : {}) }
+        headers: { 'user-agent': UA, ...BROWSER_HEADERS, ...(init.headers ?? {}), ...(cookie ? { cookie } : {}) }
       })
       this.absorb(res)
       const loc = res.headers.get('location')
@@ -153,6 +163,22 @@ export class SociabuzzGateway implements PaymentGateway {
   }
 
   async create(amountIn: number, o: { method: string; name: string; message: string }): Promise<GatewayPayment> {
+    let lastErr: unknown
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await this.createOnce(amountIn, o)
+      } catch (e) {
+        lastErr = e
+        // Hanya ulang untuk penolakan CSRF/verifikasi (sesi baru = token baru); error lain langsung dilempar.
+        if (!/security verification|csrf|refresh/i.test(String((e as Error)?.message))) throw e
+        console.warn(`sociabuzz: verifikasi ditolak (percobaan ${attempt}/3)`, (e as Error).message)
+        await new Promise((r) => setTimeout(r, 400 * attempt))
+      }
+    }
+    throw lastErr
+  }
+
+  private async createOnce(amountIn: number, o: { method: string; name: string; message: string }): Promise<GatewayPayment> {
     const pm = SB_METHODS[o.method]
     if (!pm) throw new Error(`Metode "${o.method}" tidak tersedia`)
     const amount = cleanAmount(amountIn)
@@ -166,8 +192,11 @@ export class SociabuzzGateway implements PaymentGateway {
     const csrf = inputValue(home.text, 'sb_token_csrf')
     if (!csrf) throw new Error('CSRF token halaman donasi tidak ditemukan (struktur Sociabuzz berubah atau username salah)')
 
+    // Token CSRF form harus sama dengan cookie-nya; server kadang tidak mengirim cookie itu lewat Set-Cookie.
+    s.set('sociabuzz_sb_cookie_csrf', s.get('csrf_cookie_name') ?? csrf)
+
     const form = new URLSearchParams({
-      sb_token_csrf: csrf, currency: 'IDR', amount: String(amount), qty: '1', support_duration: '30',
+      sb_token_csrf: s.get('csrf_cookie_name') ?? csrf, currency: 'IDR', amount: String(amount), qty: '1', support_duration: '30',
       note: o.message, fullname: o.name, email: `donatur${Date.now()}@gmail.com`, is_agree: '1', years18: '1',
       is_vote: '0', is_voice: '0', is_mediashare: '0', is_gif: '0', is_sound: '0', is_voicy: '0', vote_id: '',
       ms_maxtime: '', start_from: '0', ms_starthour: '0', ms_startminute: '0', ms_startsecond: '0', spin_check: '0',
@@ -180,7 +209,16 @@ export class SociabuzzGateway implements PaymentGateway {
       headers: { 'content-type': 'application/x-www-form-urlencoded', origin: this.base, referer: donateUrl, 'x-requested-with': 'XMLHttpRequest' }
     })
     const subJson = parseJson(sub.text)
-    if (!subJson || (subJson.success !== 'true' && subJson.success !== true)) throw new Error(subJson?.content?.form_alert || 'Sociabuzz menolak form donasi')
+    if (!subJson || (subJson.success !== 'true' && subJson.success !== true)) {
+      console.error('sociabuzz form ditolak', {
+        homeStatus: home.status,
+        subStatus: sub.status,
+        cookies: [...s.names()],
+        home: home.text.slice(0, 120).replace(/\s+/g, ' '),
+        sub: sub.text.slice(0, 300).replace(/\s+/g, ' ')
+      })
+      throw new Error(subJson?.content?.form_alert || 'Sociabuzz menolak form donasi')
+    }
 
     const paymentUrl = String(subJson.content?.redirect ?? '')
     const token = paymentUrl.split('/payment/x/')[1]?.split(/[?#]/)[0]
