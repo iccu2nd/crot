@@ -29,11 +29,6 @@ export const config = {
     /** Email owner (pisah koma). Akun yang masuk lewat Google dengan email terverifikasi ini otomatis dapat centang verified. */
     ownerEmails: (env.OWNER_EMAILS ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
   },
-  /** Premium: pembayaran lewat Sociabuzz (akun penerima donasi). PREMIUM_ENABLED=0 mematikan pembelian. */
-  premium: {
-    enabled: env.PREMIUM_ENABLED !== '0',
-    sociabuzzUsername: (env.SOCIABUZZ_USERNAME ?? 'reyzdesu').trim()
-  },
   pgPoolMax: serverless ? 2 : 10,
   autoMigrate: !serverless,
   providers: [...PROVIDER_KEYS],

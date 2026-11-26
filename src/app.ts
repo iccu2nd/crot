@@ -33,7 +33,6 @@ import { PremiumService } from './services/premium.js'
 import { PushService } from './services/push.js'
 import { ReadingService } from './services/reading.js'
 import { ScraperService } from './services/scraper.js'
-import { SociabuzzGateway } from './services/sociabuzz.js'
 import { ViewCounter } from './services/views.js'
 import { Warmer } from './services/warmer.js'
 import { XpService } from './services/xp.js'
@@ -148,7 +147,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   const chat = new ChatService(pool, cfg.auth.ownerEmails)
   const reading = new ReadingService(pool)
   const announcements = new AnnouncementRepo(pool)
-  const premium = new PremiumService(pool, new SociabuzzGateway({ username: cfg.premium.sociabuzzUsername }), log, cfg.premium.enabled)
+  const premium = new PremiumService(pool)
 
   // ---- error handling ----
   app.setErrorHandler((err: any, req, reply) => {
@@ -205,12 +204,10 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   app.addHook('onReady', async () => {
     if (cfg.serverless) return // tanpa timer latar di serverless
     views.start()
-    premium.start() // cek pembayaran yang menggantung di latar belakang (tanpa ini, status hanya diperiksa saat app membukanya)
     if (cfg.warmer.enabled) warmer.start()
   })
   app.addHook('onClose', async () => {
     warmer.stop()
-    premium.stop()
     await views.stop()
     await pool.end().catch(() => {})
     redis.disconnect()

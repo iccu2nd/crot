@@ -18,41 +18,15 @@ export const premiumRoutes: FastifyPluginAsync<{ auth: AuthService; premium: Pre
     return { data: premium.catalog() }
   })
 
-  app.post(
-    '/premium/orders',
-    {
-      schema: {
-        tags: ['premium'],
-        summary: 'Buat pesanan Premium (Sociabuzz). Harga ditetapkan server; pesanan yang sama & masih berlaku dilanjutkan.',
-        body: { type: 'object', required: ['plan', 'method'], properties: { plan: { type: 'string', maxLength: 10 }, method: { type: 'string', maxLength: 30 } } }
-      },
-      config: limit(8)
-    },
-    async (req, reply) => {
-      const me = await auth.me(req.headers.authorization)
-      const b = req.body as { plan: string; method: string }
-      void reply.headers(noStore)
-      return { data: await premium.createOrder(me.id, me.username, b.plan, b.method) }
-    }
-  )
-
-  app.get('/premium/orders/latest', { schema: { tags: ['premium'], summary: 'Pesanan terbaru yang masih menunggu bayar (atau baru lunas)' }, config: limit(30) }, async (req, reply) => {
-    const me = await auth.me(req.headers.authorization)
-    const order = await premium.latest(me.id)
-    void reply.headers(noStore)
-    return { data: { order }, me: order?.status === 'paid' ? await auth.me(req.headers.authorization) : undefined }
+  // Pembelian dihapus. Endpoint tetap ada supaya app lama tidak error: tak ada pesanan, membuat pesanan ditolak.
+  app.post('/premium/orders', { schema: { tags: ['premium'], summary: 'Dinonaktifkan' }, config: limit(8) }, async () => {
+    throw new AppError(503, 'PREMIUM_DISABLED', 'Pembelian Premium sedang dinonaktifkan')
   })
 
-  app.get(
-    '/premium/orders/:id',
-    { schema: { tags: ['premium'], summary: 'Status pesanan; Premium aktif otomatis begitu pembayaran terverifikasi (balasan memuat `me` terbaru saat lunas)', params: { type: 'object', properties: { id: { type: 'string', maxLength: 64 } } } }, config: limit(90) },
-    async (req, reply) => {
-      const me = await auth.me(req.headers.authorization)
-      const order = await premium.getOrder(me.id, (req.params as { id: string }).id)
-      void reply.headers(noStore)
-      return { data: order, me: order.status === 'paid' ? await auth.me(req.headers.authorization) : undefined }
-    }
-  )
+  app.get('/premium/orders/latest', { schema: { tags: ['premium'], summary: 'Selalu kosong (pembelian dinonaktifkan)' }, config: limit(30) }, async (_req, reply) => {
+    void reply.headers(noStore)
+    return { data: { order: null } }
+  })
 
   // ---- tampilan profil Premium ----
   app.patch(
