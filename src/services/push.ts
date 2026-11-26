@@ -3,8 +3,6 @@ import type { FastifyBaseLogger } from 'fastify'
 import type { ChapterSummary } from '../core/types.js'
 
 export const pushTopic = (seriesId: string) => 's_' + createHash('sha1').update(seriesId).digest('hex').slice(0, 24)
-/** Topic per user: app subscribe saat login. Dipakai notifikasi balasan komentar. */
-export const userTopic = (userId: number) => 'u_' + Math.floor(userId)
 
 const num = (s: string) => (Number.isFinite(parseFloat(s)) ? parseFloat(s) : -Infinity)
 
@@ -96,42 +94,6 @@ export class PushService {
       const err = (e as Error).message
       this.log.warn({ series: series.id, err }, 'push: send failed')
       await this.repo.logPush({ kind: 'chapter', title: series.title, body: `Chapter ${ch.number}`, seriesId: series.id, ok: false, error: err }).catch(() => undefined)
-    }
-  }
-
-  /**
-   * Push ke satu user (topic `u_<id>`) saat komentarnya dibalas.
-   * Data-only; app menampilkan notifikasi lokal. Gagal = diam (tidak mengganggu alur komentar).
-   */
-  async commentReply(toUserId: number, p: {
-    fromName: string
-    body: string
-    target: string
-    commentId: string
-    parentId: string
-  }): Promise<void> {
-    if (!this.configured || !toUserId) return
-    const st = await this.settings()
-    if (!st.enabled) return
-    const m = await this.init()
-    if (!m) return
-    const title = 'Komentarmu dibalas'
-    const text = `${p.fromName}: ${p.body}`.slice(0, 120)
-    try {
-      await m.send({
-        topic: userTopic(toUserId),
-        data: {
-          type: 'reply',
-          title,
-          body: text,
-          target: p.target,
-          commentId: p.commentId,
-          parentId: p.parentId
-        },
-        android: { priority: 'high', ttl: 24 * 3600 * 1000 }
-      })
-    } catch (e) {
-      this.log.warn({ userId: toUserId, err: (e as Error).message }, 'push: reply failed')
     }
   }
 

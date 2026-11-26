@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { checkTarget, cleanComment, isJpeg } from '../src/core/util.js'
 import { CommentService } from '../src/services/comments.js'
-import { XP_RULES, levelCost, levelFor, streakOf, weekWindow } from '../src/core/xp.js'
+import { XP_RULES, levelCost, levelFor, xpForLevel, XP_MAX, MAX_LEVEL, streakOf, weekWindow } from '../src/core/xp.js'
 import { XpService } from '../src/services/xp.js'
 
 test('target komentar: seri & chapter valid, lainnya ditolak', () => {
@@ -191,18 +191,25 @@ test('XP dari like: hanya untuk like orang lain, sekali per penyuka', async () =
   assert.deepEqual(awards, [[1, 'comment', String(c.id)], [1, 'liked', `${c.id}:2`]])
 })
 
+test('level 9999 & 10000 bisa dicapai (bug admin tersangkut di Lv. 663)', () => {
+  for (const l of [663, 664, 5000, 9999, MAX_LEVEL]) assert.equal(levelFor(xpForLevel(l)).level, l)
+  assert.equal(levelFor(xpForLevel(9999) - 1).level, 9998)
+  assert.equal(levelFor(XP_MAX * 10).level, MAX_LEVEL)
+  assert.ok(XP_MAX < 100_000_000_000)
+})
+
 test('kurva level: awal murah, makin tinggi makin mahal, konsisten dengan levelFor', () => {
-  assert.equal(levelCost(1), 40)
+  assert.equal(levelCost(1), 20)
   for (let l = 1; l < 200; l++) assert.ok(levelCost(l + 1) > levelCost(l))
-  assert.deepEqual(levelFor(0), { level: 1, into: 0, need: 40 })
-  assert.deepEqual(levelFor(39), { level: 1, into: 39, need: 40 })
-  assert.deepEqual(levelFor(40), { level: 2, into: 0, need: levelCost(2) })
+  assert.deepEqual(levelFor(0), { level: 1, into: 0, need: 20 })
+  assert.deepEqual(levelFor(19), { level: 1, into: 19, need: 20 })
+  assert.deepEqual(levelFor(20), { level: 2, into: 0, need: levelCost(2) })
   let total = 0
   for (let l = 1; l < 10; l++) total += levelCost(l)
   assert.equal(levelFor(total).level, 10)
   assert.equal(levelFor(total - 1).level, 9)
   assert.equal(levelFor(-5).level, 1)
-  // aktivitas ringan sudah cukup untuk naik cepat di awal: 4 chapter = level 2
+  // aktivitas ringan sudah cukup untuk naik cepat di awal: 4 chapter (40 XP) = level 2; level 10 hanya 384 XP
   assert.equal(levelFor(4 * XP_RULES.read.xp).level, 2)
 })
 

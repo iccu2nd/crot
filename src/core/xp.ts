@@ -16,19 +16,33 @@ export type XpKind = keyof typeof XP_RULES
 /** Jenis yang boleh dilaporkan app lewat POST /xp/event (komentar & like dihitung server sendiri). */
 export const CLIENT_KINDS = ['read', 'bookmark', 'daily'] as const
 
+export const MAX_LEVEL = 10000
+
 /**
- * XP yang dibutuhkan untuk naik dari level L ke L+1. Awal-awal murah, makin tinggi makin mahal:
- * L1→2: 40 · L5→6: 116 · L10→11: 256 · L20→21: 686 · L50→51: 3.176.
+ * XP yang dibutuhkan untuk naik dari level L ke L+1 (k = L-1): 20 + 5k + k²/8 (bilangan bulat).
+ * Awal-awal sangat murah, makin tinggi makin mahal:
+ * L1→2: 20 · L5→6: 42 · L10→11: 75 · L20→21: 160 · L50→51: 565 · L100→101: 1.740.
+ * Total XP: Lv. 10 = 384 · Lv. 50 = 11.604 · Lv. 100 = 66.035 · Lv. 10.000 ≈ 41,9 miliar.
  */
-export const levelCost = (level: number): number => 40 + 15 * (level - 1) + (level - 1) ** 2
+export const levelCost = (level: number): number => {
+  const k = Math.max(0, Math.floor(level) - 1)
+  return 20 + 5 * k + Math.floor((k * k) / 8)
+}
+
+/** CUM[L] = total XP minimum untuk mencapai level L (CUM[1] = 0). Dihitung sekali; semua pencarian level O(log n). */
+const CUM: number[] = (() => {
+  const a = new Array<number>(MAX_LEVEL + 1).fill(0)
+  for (let l = 2; l <= MAX_LEVEL; l++) a[l] = a[l - 1] + levelCost(l - 1)
+  return a
+})()
 
 /** Total XP minimum untuk mencapai level tertentu (kebalikan [levelFor]); level 1 = 0 XP. */
 export function xpForLevel(level: number): number {
-  const target = Math.max(1, Math.min(10000, Math.floor(Number(level) || 1)))
-  let total = 0
-  for (let l = 1; l < target; l++) total += levelCost(l)
-  return total
+  return CUM[Math.max(1, Math.min(MAX_LEVEL, Math.floor(Number(level) || 1)))]
 }
+
+/** XP minimum Lv. 10.000 = batas atas XP yang dipakai panel admin. */
+export const XP_MAX = CUM[MAX_LEVEL]
 
 interface LevelInfo {
   level: number
@@ -39,13 +53,16 @@ interface LevelInfo {
 }
 
 export function levelFor(xp: number): LevelInfo {
-  let level = 1
-  let left = Math.max(0, Math.floor(Number(xp) || 0))
-  while (left >= levelCost(level) && level < 10000) {
-    left -= levelCost(level)
-    level++
+  const x = Math.max(0, Math.floor(Number(xp) || 0))
+  let lo = 1
+  let hi = MAX_LEVEL
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (CUM[mid] <= x) lo = mid
+    else hi = mid - 1
   }
-  return { level, into: left, need: levelCost(level) }
+  const need = levelCost(lo)
+  return { level: lo, into: Math.min(x - CUM[lo], lo >= MAX_LEVEL ? need : Infinity), need }
 }
 
 const WIB_MS = 7 * 3600_000

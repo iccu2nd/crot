@@ -1,4 +1,4 @@
-import { levelFor, xpForLevel } from '../core/xp.js'
+import { levelFor, xpForLevel, XP_MAX } from '../core/xp.js'
 import type { Pool, PoolClient } from 'pg'
 import type { ChapterContent, ChapterSummary, DbPage, GenreFilters, GenreRow, SortKey, ProviderKey, SeriesDetail, SeriesSummary, SeriesStatus, SourceRef, Store } from '../core/types.js'
 import { normTitle, slugify } from '../core/util.js'
@@ -848,7 +848,6 @@ export class PgStore implements Store {
    * Hasil dibatasi 0..XP_MAX. Buku besar `xp_events` (papan peringkat mingguan) tidak diubah.
    */
   async adminSetXp(userId: number, p: { xp?: number; level?: number; delta?: number }, ownerEmails: string[] = []) {
-    const XP_MAX = xpForLevel(10000) // batas level 10.000 (~334 miliar XP)
     const given = [p.xp, p.level, p.delta].filter(v => v !== undefined).length
     if (given !== 1) throw new Error('status: isi salah satu: xp, level, atau delta')
     const cur = await this.adminGetUser(userId, ownerEmails)
