@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import type { Pool } from 'pg'
 import type { Config } from '../config.js'
 import { levelFor, streakOf, type Streak } from '../core/xp.js'
+import { isPremiumSql } from '../core/premium.js'
 import { USERNAME_MSG, USERNAME_RE, formatCooldown, signToken, slugUsername, verifyToken } from '../core/auth.js'
 import { AppError, ConflictError, NotConfiguredError, NotFoundError, UnauthorizedError, ValidationError } from '../core/errors.js'
 
@@ -25,8 +26,17 @@ export interface AuthUser {
   verified: boolean
   /** true jika email akun ada di OWNER_EMAILS (panel admin) */
   isOwner: boolean
-  /** Premium Member (ditetapkan owner lewat panel admin) */
+  /** Premium Member aktif: langganan berbayar belum habis, atau diberikan owner lewat panel admin */
   premium: boolean
+  /** langganan berakhir kapan (epoch ms); 0 = tidak ada langganan berbayar (mis. Premium pemberian owner = permanen) */
+  premiumUntil: number
+  /** tampilan profil Premium (kosong/0 = bawaan; hanya terisi selama Premium aktif) */
+  theme: string
+  frame: string
+  /** versi background header (0 = tidak ada); dipakai app untuk URL /users/:id/header?v= */
+  headerV: number
+  headerBlur: number
+  headerPos: number
   /** pengguna menyembunyikan centang verified-nya dari tampilan publik (`verified` tetap status asli) */
   verifiedHidden: boolean
   /** pengguna menyembunyikan daftar "Sedang dibaca" dari profil publik */
@@ -53,6 +63,12 @@ interface PublicProfile {
   isOwner: boolean
   /** Premium Member */
   premium: boolean
+  /** tampilan profil Premium (hanya terisi selama Premium aktif) */
+  theme: string
+  frame: string
+  headerV: number
+  headerBlur: number
+  headerPos: number
   /** pemilik menyembunyikan daftar "Sedang dibaca" */
   readingHidden: boolean
   /** streak membaca; null bila pemilik menyembunyikan aktivitas bacanya */
@@ -66,13 +82,25 @@ type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: strin
 
 /** Username hanya boleh diganti sekali per 7 hari. */
 const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, premium, verified_hidden AS "verifiedHidden", reading_hidden AS "readingHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason", token_version AS "tokenVersion"`
+const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, ${isPremiumSql()} AS premium, CASE WHEN premium_until IS NOT NULL AND premium_until > now() THEN (EXTRACT(EPOCH FROM premium_until) * 1000)::bigint ELSE 0 END AS "premiumUntil", theme, frame, CASE WHEN header_bg IS NULL THEN 0 ELSE header_v END AS "headerV", header_blur AS "headerBlur", header_pos AS "headerPos", verified_hidden AS "verifiedHidden", reading_hidden AS "readingHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason", token_version AS "tokenVersion"`
 
-type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; verifiedHidden?: boolean; readingHidden?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null; tokenVersion?: number | null }
+type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; premiumUntil?: number | string | null; theme?: string | null; frame?: string | null; headerV?: number; headerBlur?: number; headerPos?: number; verifiedHidden?: boolean; readingHidden?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null; tokenVersion?: number | null }
 /** Waktu bisu (epoch ms) bila masih berlaku, selain itu 0. */
 const mutedUntilMs = (v: Date | string | null | undefined, now = Date.now()): number => {
   const t = v ? new Date(v).getTime() : 0
   return t > now ? t : 0
+}
+
+/** Tema, frame & header hanya tampil selama Premium aktif (datanya tetap tersimpan, aktif lagi saat diperpanjang). */
+const profileStyle = (r: { premium?: boolean; theme?: string | null; frame?: string | null; headerV?: number; headerBlur?: number; headerPos?: number }) => {
+  const on = r.premium === true
+  return {
+    theme: on ? r.theme ?? '' : '',
+    frame: on ? r.frame ?? '' : '',
+    headerV: on ? Number(r.headerV ?? 0) : 0,
+    headerBlur: on ? Number(r.headerBlur ?? 0) : 0,
+    headerPos: on ? Number(r.headerPos ?? 50) : 50
+  }
 }
 
 const toUser = (r: Row, ownerEmails: string[] = []): AuthUser => {
@@ -89,6 +117,8 @@ const toUser = (r: Row, ownerEmails: string[] = []): AuthUser => {
   verified: r.verified === true || isOwner,
   isOwner,
   premium: r.premium === true,
+  premiumUntil: Number(r.premiumUntil ?? 0),
+  ...profileStyle(r),
   verifiedHidden: r.verifiedHidden === true,
   readingHidden: r.readingHidden === true,
   mutedUntil: mutedUntilMs(r.mutedUntil),
@@ -247,7 +277,7 @@ export class AuthService {
 
   async publicProfile(userId: number): Promise<PublicProfile> {
     const { rows } = await this.pool.query(
-      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, u.premium, u.verified_hidden, u.reading_hidden, u.created_at AS "createdAt",
+      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, ${isPremiumSql('u')} AS premium, u.theme, u.frame, CASE WHEN u.header_bg IS NULL THEN 0 ELSE u.header_v END AS "headerV", u.header_blur AS "headerBlur", u.header_pos AS "headerPos", u.verified_hidden, u.reading_hidden, u.created_at AS "createdAt",
               CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
               (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount",
               COALESCE((SELECT array_agg(to_char(d.day, 'YYYY-MM-DD') ORDER BY d.day DESC) FROM (SELECT day FROM read_days WHERE user_id = u.id ORDER BY day DESC LIMIT 1000) d), '{}') AS "readDays"
@@ -272,6 +302,7 @@ export class AuthService {
       verified: (r.verified === true || isOwner) && r.verified_hidden !== true, // disembunyikan pemiliknya = tidak tampil publik
       isOwner,
       premium: r.premium === true,
+      ...profileStyle({ ...r, premium: r.premium === true }),
       readingHidden: r.reading_hidden === true,
       streak: r.reading_hidden === true ? null : streakOf((r.readDays as string[] | undefined) ?? [])
     }
@@ -287,21 +318,23 @@ export class AuthService {
 
   // ------------------------------------------------------------------ foto profil
 
-  async setAvatar(userId: number, jpeg: Buffer): Promise<AuthUser> {
-    const { rows } = await this.pool.query('UPDATE users SET avatar = $2, avatar_v = avatar_v + 1 WHERE id = $1 RETURNING ' + COLS, [userId, jpeg])
+  /** Simpan foto profil. JPEG untuk semua; GIF animasi (`mime` = image/gif) hanya dipanggil route untuk Premium. */
+  async setAvatar(userId: number, img: Buffer, mime: 'image/jpeg' | 'image/gif' = 'image/jpeg'): Promise<AuthUser> {
+    const { rows } = await this.pool.query('UPDATE users SET avatar = $2, avatar_mime = $3, avatar_v = avatar_v + 1 WHERE id = $1 RETURNING ' + COLS, [userId, img, mime])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
     return toUser(rows[0], this.cfg.ownerEmails)
   }
 
   async clearAvatar(userId: number): Promise<AuthUser> {
-    const { rows } = await this.pool.query('UPDATE users SET avatar = NULL, avatar_v = avatar_v + 1 WHERE id = $1 RETURNING ' + COLS, [userId])
+    const { rows } = await this.pool.query(`UPDATE users SET avatar = NULL, avatar_mime = 'image/jpeg', avatar_v = avatar_v + 1 WHERE id = $1 RETURNING ` + COLS, [userId])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
     return toUser(rows[0], this.cfg.ownerEmails)
   }
 
-  async avatarOf(userId: number): Promise<Buffer | null> {
-    const { rows } = await this.pool.query('SELECT avatar FROM users WHERE id = $1', [userId])
-    return (rows[0]?.avatar as Buffer | null) ?? null
+  async avatarOf(userId: number): Promise<{ data: Buffer; mime: string } | null> {
+    const { rows } = await this.pool.query('SELECT avatar, avatar_mime FROM users WHERE id = $1', [userId])
+    const data = (rows[0]?.avatar as Buffer | null) ?? null
+    return data ? { data, mime: String(rows[0]?.avatar_mime ?? 'image/jpeg') } : null
   }
 
   // ------------------------------------------------------------------ google

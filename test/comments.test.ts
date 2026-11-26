@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { checkTarget, cleanComment, isJpeg } from '../src/core/util.js'
 import { CommentService } from '../src/services/comments.js'
 import { XP_RULES, levelCost, levelFor, xpForLevel, XP_MAX, MAX_LEVEL, streakOf, weekWindow } from '../src/core/xp.js'
+import { premiumXp } from '../src/core/premium.js'
 import { XpService } from '../src/services/xp.js'
 
 test('target komentar: seri & chapter valid, lainnya ditolak', () => {
@@ -220,7 +221,9 @@ test('XpService: ledger (sekali per ref + batas harian) dan validasi laporan dar
   assert.equal(await svc.report(7, 'read', 'lumos:bab-1'), XP_RULES.read.xp)
   assert.deepEqual(calls[0], [7]) // hari baca dicatat dulu (untuk streak)
   assert.deepEqual(calls[1].slice(0, 3), [7, 'read', 'lumos:bab-1'])
-  assert.deepEqual(calls[1].slice(3), [XP_RULES.read.xp, XP_RULES.read.perDay])
+  assert.deepEqual(calls[1].slice(3), [XP_RULES.read.xp, XP_RULES.read.perDay, premiumXp(XP_RULES.read.xp)]) // parameter terakhir = XP untuk Premium aktif
+  const prem = new XpService({ query: async () => ({ rows: [{ gained: premiumXp(XP_RULES.read.xp) }] }) } as any)
+  assert.equal(await prem.award(7, 'read', 'lumos:bab-2'), 15, 'XP yang dikembalikan = yang benar-benar dicatat server (Premium lebih besar)')
   granted = false
   const before = calls.length
   assert.equal(await svc.report(7, 'read', 'lumos:bab-1'), 0) // sudah pernah / kuota habis

@@ -18,6 +18,7 @@ import { chatRoutes } from './routes/chat.js'
 import { commentRoutes } from './routes/comments.js'
 import { libraryRoutes } from './routes/library.js'
 import { notificationRoutes } from './routes/notifications.js'
+import { premiumRoutes } from './routes/premium.js'
 import { readingRoutes } from './routes/reading.js'
 import { seriesRoutes } from './routes/series.js'
 import { systemRoutes } from './routes/system.js'
@@ -28,9 +29,11 @@ import { ChatService } from './services/chat.js'
 import { CommentService } from './services/comments.js'
 import { LibraryService } from './services/library.js'
 import { NotificationService } from './services/notifications.js'
+import { PremiumService } from './services/premium.js'
 import { PushService } from './services/push.js'
 import { ReadingService } from './services/reading.js'
 import { ScraperService } from './services/scraper.js'
+import { SociabuzzGateway } from './services/sociabuzz.js'
 import { ViewCounter } from './services/views.js'
 import { Warmer } from './services/warmer.js'
 import { XpService } from './services/xp.js'
@@ -145,6 +148,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   const chat = new ChatService(pool, cfg.auth.ownerEmails)
   const reading = new ReadingService(pool)
   const announcements = new AnnouncementRepo(pool)
+  const premium = new PremiumService(pool, new SociabuzzGateway({ username: cfg.premium.sociabuzzUsername }), log, cfg.premium.enabled)
 
   // ---- error handling ----
   app.setErrorHandler((err: any, req, reply) => {
@@ -187,6 +191,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
       await v1.register(commentRoutes, { auth, comments })
       await v1.register(chatRoutes, { auth, chat })
       await v1.register(xpRoutes, { auth, xp })
+      await v1.register(premiumRoutes, { auth, premium })
       await v1.register(readingRoutes, { auth, reading })
       await v1.register(libraryRoutes, { auth, library: new LibraryService(pool) })
       await v1.register(announcementRoutes, { repo: announcements })
@@ -200,10 +205,12 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   app.addHook('onReady', async () => {
     if (cfg.serverless) return // tanpa timer latar di serverless
     views.start()
+    premium.start() // cek pembayaran yang menggantung di latar belakang (tanpa ini, status hanya diperiksa saat app membukanya)
     if (cfg.warmer.enabled) warmer.start()
   })
   app.addHook('onClose', async () => {
     warmer.stop()
+    premium.stop()
     await views.stop()
     await pool.end().catch(() => {})
     redis.disconnect()

@@ -1,5 +1,6 @@
 import type { Pool } from 'pg'
 import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
+import { isPremiumSql } from '../core/premium.js'
 import { levelFor } from '../core/xp.js'
 
 /** Jumlah pesan yang disimpan & dikirim ke app. Yang lebih lama dihapus otomatis tiap ada pesan baru. */
@@ -29,7 +30,7 @@ export interface ChatItem {
   user: { id: number; username: string; displayName: string; avatarV: number; level: number; verified: boolean; isOwner: boolean; premium: boolean }
 }
 
-const SELECT = `SELECT m.id, m.body, m.created_at, m.reply_to, m.reply_user, m.reply_body, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, u.premium, u.verified_hidden,
+const SELECT = `SELECT m.id, m.body, m.created_at, m.reply_to, m.reply_user, m.reply_body, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, ${isPremiumSql('u')} AS premium, u.verified_hidden,
                 CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v
                 FROM chat_messages m JOIN users u ON u.id = m.user_id`
 

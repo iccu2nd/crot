@@ -1,5 +1,6 @@
 import type { Pool } from 'pg'
 import { ValidationError } from '../core/errors.js'
+import { isPremiumSql, premiumXp } from '../core/premium.js'
 import { PROVIDER_KEYS, type ProviderKey } from '../core/types.js'
 import { CLIENT_KINDS, XP_RULES, levelFor, streakOf, weekWindow, type Streak, type XpKind } from '../core/xp.js'
 
@@ -19,21 +20,26 @@ export class XpService {
     private readonly ownerEmails: string[] = []
   ) {}
 
-  /** Beri XP bila belum pernah & kuota harian belum habis. Mengembalikan XP yang didapat (0 = tidak ada). */
+  /**
+   * Beri XP bila belum pernah & kuota harian belum habis. Mengembalikan XP yang didapat (0 = tidak ada).
+   * Premium aktif mendapat XP lebih besar (lihat PREMIUM_XP_MULT); kuota harian per jenis tetap sama untuk semua.
+   */
   async award(userId: number, kind: XpKind, ref: string): Promise<number> {
     const rule = XP_RULES[kind]
     const { rows } = await this.pool.query(
-      `WITH ins AS (
+      `WITH p AS (
+         SELECT ${isPremiumSql()} AS active FROM users WHERE id = $1::int
+       ), ins AS (
          INSERT INTO xp_events (user_id, kind, ref, xp)
-         SELECT $1::int, $2::text, $3::text, $4::int
+         SELECT $1::int, $2::text, $3::text, CASE WHEN (SELECT active FROM p) THEN $6::int ELSE $4::int END
          WHERE (SELECT count(*) FROM xp_events WHERE user_id = $1::int AND kind = $2::text AND day = ((now() AT TIME ZONE 'Asia/Jakarta')::date)) < $5::int
          ON CONFLICT (user_id, kind, ref) DO NOTHING
          RETURNING xp
        )
-       UPDATE users SET xp = xp + (SELECT xp FROM ins) WHERE id = $1::int AND EXISTS (SELECT 1 FROM ins) RETURNING id`,
-      [userId, kind, ref, rule.xp, rule.perDay]
+       UPDATE users SET xp = xp + (SELECT xp FROM ins) WHERE id = $1::int AND EXISTS (SELECT 1 FROM ins) RETURNING (SELECT xp FROM ins) AS gained`,
+      [userId, kind, ref, rule.xp, rule.perDay, premiumXp(rule.xp)]
     )
-    return rows.length ? rule.xp : 0
+    return rows.length ? Number(rows[0].gained ?? rule.xp) : 0
   }
 
   /** Laporan dari app (baca chapter, tambah pustaka, buka harian). Jenis & ref divalidasi. */
@@ -86,7 +92,7 @@ export class XpService {
          SELECT e.user_id, sum(e.xp)::int AS wxp, max(e.created_at) AS last_at
            FROM xp_events e WHERE e.day >= $1::date GROUP BY e.user_id
        ), r AS (
-         SELECT w.user_id, w.wxp, u.username, u.display_name, u.xp, u.email, u.verified, u.premium, u.verified_hidden,
+         SELECT w.user_id, w.wxp, u.username, u.display_name, u.xp, u.email, u.verified, ${isPremiumSql('u')} AS premium, u.verified_hidden,
                 CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v,
                 row_number() OVER (ORDER BY w.wxp DESC, w.last_at ASC, w.user_id ASC)::int AS rank
            FROM w JOIN users u ON u.id = w.user_id WHERE u.banned_at IS NULL

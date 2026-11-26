@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { USER_CONTENT_CSP } from '../core/security.js'
 import { MAX_AVATAR_BYTES, isJpeg } from '../core/util.js'
-import { NotFoundError, ValidationError } from '../core/errors.js'
+import { MAX_GIF_AVATAR_BYTES, isGif } from '../core/premium.js'
+import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
 import type { AuthService } from '../services/auth.js'
 
 const noStore = { 'cache-control': 'no-store' }
@@ -28,9 +29,18 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
   // ---- foto profil: JPEG mentah (app sudah memotong persegi & mengecilkan ke ±384px) ----
   app.addContentTypeParser('image/jpeg', { parseAs: 'buffer', bodyLimit: MAX_AVATAR_BYTES }, (_req, body, done) => done(null, body))
 
-  app.put('/auth/me/avatar', { schema: { tags: ['auth'], summary: 'Ganti foto profil (body = image/jpeg, maks. 300 KB)' }, config: limit(10) }, async (req, reply) => {
+  // GIF animasi: khusus Premium, maks. 2 MB.
+  app.addContentTypeParser('image/gif', { parseAs: 'buffer', bodyLimit: MAX_GIF_AVATAR_BYTES }, (_req, body, done) => done(null, body))
+
+  app.put('/auth/me/avatar', { schema: { tags: ['auth'], summary: 'Ganti foto profil (body = image/jpeg maks. 300 KB, atau image/gif maks. 2 MB khusus Premium)' }, config: limit(10) }, async (req, reply) => {
     const user = await auth.me(req.headers.authorization)
     const body = req.body
+    if (isGif(body)) {
+      if (!user.premium) throw new AppError(403, 'PREMIUM_REQUIRED', 'Foto profil GIF khusus Premium')
+      if (body.length > MAX_GIF_AVATAR_BYTES) throw new ValidationError('GIF terlalu besar (maks. 2 MB)')
+      reply200(reply)
+      return { data: await auth.setAvatar(user.id, body, 'image/gif') }
+    }
     if (!isJpeg(body)) throw new ValidationError('Foto harus berformat JPEG')
     if (body.length > MAX_AVATAR_BYTES) throw new ValidationError('Foto terlalu besar (maks. 300 KB)')
     reply200(reply)
@@ -54,14 +64,15 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     '/users/:id/avatar',
     { schema: { tags: ['auth'], summary: 'Foto profil pengguna', params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } } } }, config: limit(300) },
     async (req, reply) => {
-      const buf = await auth.avatarOf((req.params as { id: number }).id)
-      if (!buf) throw new NotFoundError('Belum ada foto profil')
+      const img = await auth.avatarOf((req.params as { id: number }).id)
+      if (!img) throw new NotFoundError('Belum ada foto profil')
+      const gif = img.mime === 'image/gif'
       return reply
-        .header('content-type', 'image/jpeg')
+        .header('content-type', gif ? 'image/gif' : 'image/jpeg')
         .header('content-security-policy', USER_CONTENT_CSP)
-        .header('content-disposition', 'inline; filename="avatar.jpg"')
+        .header('content-disposition', `inline; filename="avatar.${gif ? 'gif' : 'jpg'}"`)
         .header('cache-control', 'public, max-age=31536000, immutable')
-        .send(buf)
+        .send(img.data)
     }
   )
 

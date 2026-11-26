@@ -1,6 +1,7 @@
 import type { Pool } from 'pg'
 import { checkTarget, cleanComment } from '../core/util.js'
 import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
+import { isPremiumSql } from '../core/premium.js'
 import { levelFor } from '../core/xp.js'
 import type { XpService } from './xp.js'
 
@@ -39,7 +40,7 @@ const toItem = (r: any, ownerEmails: string[] = []): CommentItem => {
 }
 
 /** Kolom komentar + penulis + jumlah like/dislike/balasan + suara pemirsa (`viewer` = placeholder id pemirsa, mis. '$4'). */
-const select = (viewer: string) => `SELECT c.id, c.target, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, u.premium, u.verified_hidden,
+const select = (viewer: string) => `SELECT c.id, c.target, c.body, c.created_at, c.parent_id, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, ${isPremiumSql('u')} AS premium, u.verified_hidden,
                 CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v,
                 COALESCE(NULLIF(ru.display_name, ''), ru.username) AS reply_to_name,
                 (SELECT count(*)::int FROM comment_votes v WHERE v.comment_id = c.id AND v.value = 1) AS likes,
