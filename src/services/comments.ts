@@ -4,6 +4,7 @@ import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
 import { isPremiumSql } from '../core/premium.js'
 import { levelFor } from '../core/xp.js'
 import type { XpService } from './xp.js'
+import { assertStickerUsable } from './stickers.js'
 
 interface CommentItem {
   id: number
@@ -108,6 +109,7 @@ export class CommentService {
   async add(userId: number, target: unknown, body: unknown, replyToId?: number | null): Promise<CommentItem> {
     const t = checkTarget(target)
     const text = cleanComment(body)
+    const isSticker = await assertStickerUsable(this.pool, userId, text)
     const recent = await this.pool.query("SELECT count(*)::int AS n FROM comments WHERE user_id = $1 AND created_at > now() - interval '60 seconds'", [userId])
     if (Number(recent.rows[0]?.n ?? 0) >= MAX_COMMENTS_PER_MINUTE) throw new AppError(429, 'RATE_LIMITED', 'Terlalu cepat, tunggu sebentar sebelum berkomentar lagi')
     let parentId: number | null = null
@@ -124,7 +126,7 @@ export class CommentService {
       }
     }
     const { rows } = await this.pool.query('INSERT INTO comments (target, user_id, body, parent_id, reply_to_user_id) VALUES ($1, $2, $3, $4, $5) RETURNING id', [t, userId, text, parentId, replyToUser])
-    await this.xp?.award(userId, 'comment', String(rows[0].id)).catch(() => 0)
+    if (!isSticker) await this.xp?.award(userId, 'comment', String(rows[0].id)).catch(() => 0)
     const full = await this.pool.query(`${select('$2')} WHERE c.id = $1`, [rows[0].id, userId])
     return this.item(full.rows[0])
   }

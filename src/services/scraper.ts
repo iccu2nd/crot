@@ -312,6 +312,10 @@ export class ScraperService {
   }
 
   latest(o: PageQuery & { type?: string }): Promise<ListResult> {
+    return this.hideBroken(this.latestAll(o))
+  }
+
+  private latestAll(o: PageQuery & { type?: string }): Promise<ListResult> {
     return this.fanOut(
       o,
       async p => {
@@ -321,6 +325,31 @@ export class ScraperService {
       },
       () => this.o.store.latestLocal(dbPage(o))
     )
+  }
+
+  // ------------------------------------------------------------------ seri rusak (semua chapter error / tanpa gambar) disembunyikan dari daftar
+
+  private broken: { at: number; ids: Set<string> } = { at: 0, ids: new Set() }
+
+  private async brokenIds(): Promise<Set<string>> {
+    if (Date.now() - this.broken.at < 60_000) return this.broken.ids
+    const ids = await Promise.resolve().then(() => this.o.store.brokenSeries()).catch(() => null)
+    this.broken = { at: Date.now(), ids: ids ? new Set(ids) : this.broken.ids }
+    return this.broken.ids
+  }
+
+  private async hideBroken(p: Promise<ListResult>): Promise<ListResult> {
+    const [res, bad] = await Promise.all([p, this.brokenIds()])
+    if (!bad.size) return res
+    const data = res.data.filter(s => !(s.sources?.length ? s.sources : [{ id: s.id }]).every(x => bad.has(x.id)))
+    return data.length === res.data.length ? res : { ...res, data, meta: { ...res.meta, count: data.length } }
+  }
+
+  async markBroken(chapterId: string, seriesId: string): Promise<void> {
+    const c = parseId(chapterId)
+    const s = parseId(seriesId)
+    await this.o.store.reportBrokenChapter(c.provider, c.ref, s.provider, s.ref)
+    this.broken.at = 0
   }
 
   // ------------------------------------------------------------------ DB-backed lists (popular / genre)
@@ -336,11 +365,19 @@ export class ScraperService {
 
   /** Populer = paling banyak dibuka lewat API ini (hit detail) dalam `days` hari terakhir. */
   popular(o: PageQuery & { days: number }): Promise<ListResult> {
+    return this.hideBroken(this.popularAll(o))
+  }
+
+  private popularAll(o: PageQuery & { days: number }): Promise<ListResult> {
     return this.dbList(`p:${o.provider ?? ''}:${o.days}:${o.page}:${o.limit}`, o, () => this.o.store.popular({ ...dbPage(o), days: o.days }))
   }
 
   /** Rekomendasi = rating tertinggi dari data tersimpan. */
   recommended(o: PageQuery): Promise<ListResult> {
+    return this.hideBroken(this.recommendedAll(o))
+  }
+
+  private recommendedAll(o: PageQuery): Promise<ListResult> {
     return this.dbList(`r2:${o.provider ?? ''}:${o.page}:${o.limit}`, o, () => this.o.store.recommended(dbPage(o)))
   }
 
@@ -374,7 +411,11 @@ export class ScraperService {
     })
   }
 
-  async byGenre(slug: string, o: PageQuery & GenreFilters): Promise<ListResult> {
+  byGenre(slug: string, o: PageQuery & GenreFilters): Promise<ListResult> {
+    return this.hideBroken(this.byGenreAll(slug, o))
+  }
+
+  private async byGenreAll(slug: string, o: PageQuery & GenreFilters): Promise<ListResult> {
     const providers: Record<string, ProviderStatus> = {}
     const key = `gs:${slug}:${o.provider ?? ''}:${o.sort ?? 'latest'}:${o.type ?? ''}:${o.status ?? ''}:${o.page}:${o.limit}`
     const native = this.pick(o.provider).filter(p => p.browse)
@@ -633,6 +674,8 @@ export class ScraperService {
       last = { n: r.n, bad: r.bad, reason: r.reason ?? '' }
       if (!r.reason) {
         await this.o.store.saveChapterImages(provider, ref, r.c, provider)
+        await this.o.store.clearBrokenChapter(provider, ref).catch(() => {})
+        this.broken.at = 0
         await this.o.cache.put(key, r.c, ttl)
         return { status: 'ok', source: provider, images: r.n, bad: 0 }
       }
@@ -648,6 +691,8 @@ export class ScraperService {
         const r = await attempt(a, parseId(match.id).ref)
         if (r.reason) continue
         await this.o.store.saveChapterImages(provider, ref, r.c, sib.provider)
+        await this.o.store.clearBrokenChapter(provider, ref).catch(() => {})
+        this.broken.at = 0
         await this.o.cache.put(key, r.c, ttl)
         return { status: 'ok', source: sib.provider, images: r.n, bad: 0 }
       } catch {}

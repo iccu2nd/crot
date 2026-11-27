@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
+import type { AuthService } from '../services/auth.js'
 import type { ScraperService } from '../services/scraper.js'
 import { R, idParam } from './schemas.js'
 
@@ -9,7 +10,7 @@ const publicCache = (seconds: number, edge = seconds) => ({
 const NO_STORE = { 'cache-control': 'no-store' }
 const wantsRefresh = (q: unknown) => (q as { refresh?: string } | undefined)?.refresh === '1'
 
-export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async (app, { svc }) => {
+export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService; auth: AuthService }> = async (app, { svc, auth }) => {
   const seriesId = idParam('Id seri unified, mis. "shinigami:<uuid>", "lumos:<slug>"')
 
   app.get<{ Params: { id: string } }>(
@@ -54,6 +55,25 @@ export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService }> = async (
     async (req, reply) => {
       const refresh = wantsRefresh(req.query)
       return reply.headers(refresh ? NO_STORE : publicCache(900, 3600)).send(await svc.chapter(req.params.id, refresh))
+    }
+  )
+
+  app.post<{ Params: { id: string }; Body: { seriesId: string } }>(
+    '/chapters/:id/broken',
+    {
+      schema: {
+        tags: ['chapters'],
+        summary: 'Laporkan chapter tanpa gambar / gagal dimuat — wajib login',
+        params: idParam('Id chapter unified'),
+        body: { type: 'object', required: ['seriesId'], properties: { seriesId: { type: 'string', maxLength: 330 } } }
+      },
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } }
+    },
+    async (req, reply) => {
+      await auth.me(req.headers.authorization)
+      await svc.markBroken(req.params.id, req.body.seriesId)
+      void reply.header('cache-control', 'no-store')
+      return { data: { ok: true } }
     }
   )
 }

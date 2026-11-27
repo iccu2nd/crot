@@ -283,6 +283,31 @@ export class PgStore implements Store {
     )
   }
 
+  async reportBrokenChapter(provider: string, ref: string, seriesProvider: string, seriesRef: string) {
+    await this.pool.query(
+      `INSERT INTO chapter_health (provider, ref, series_provider, series_ref, reported_at) VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (provider, ref) DO UPDATE SET series_provider = EXCLUDED.series_provider, series_ref = EXCLUDED.series_ref, reported_at = now()`,
+      [provider, ref, seriesProvider, seriesRef]
+    )
+  }
+
+  async clearBrokenChapter(provider: string, ref: string) {
+    await this.pool.query('DELETE FROM chapter_health WHERE provider = $1 AND ref = $2', [provider, ref])
+  }
+
+  /** Seri yang laporan chapter rusaknya (3 hari terakhir) sudah mencakup semua chapter-nya (maks. 3 chapter dihitung "semua"). */
+  async brokenSeries(): Promise<string[]> {
+    const { rows } = await this.pool.query<Row>(
+      `SELECT h.series_provider || ':' || h.series_ref AS id
+         FROM chapter_health h
+        WHERE h.reported_at > now() - interval '3 days'
+        GROUP BY h.series_provider, h.series_ref
+       HAVING COUNT(*) >= LEAST(3, GREATEST(1, (SELECT COUNT(*) FROM chapters c JOIN series s ON s.id = c.series_id
+                                                 WHERE s.provider = h.series_provider AND s.ref = h.series_ref)))`
+    )
+    return rows.map(r => r.id as string)
+  }
+
   async adminChapterTarget(chapterId: number) {
     const { rows } = await this.pool.query<Row>(
       'SELECT s.provider, s.ref AS series_ref, c.ref, c.number_text FROM chapters c JOIN series s ON s.id = c.series_id WHERE c.id = $1',

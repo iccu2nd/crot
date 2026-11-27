@@ -21,6 +21,8 @@ import { notificationRoutes } from './routes/notifications.js'
 import { premiumRoutes } from './routes/premium.js'
 import { readingRoutes } from './routes/reading.js'
 import { seriesRoutes } from './routes/series.js'
+import { stickerRoutes } from './routes/stickers.js'
+import { StickerService } from './services/stickers.js'
 import { systemRoutes } from './routes/system.js'
 import { xpRoutes } from './routes/xp.js'
 import { AnnouncementRepo } from './services/announcements.js'
@@ -185,10 +187,11 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   await app.register(
     async v1 => {
       await v1.register(catalogRoutes, { svc })
-      await v1.register(seriesRoutes, { svc })
+      await v1.register(seriesRoutes, { svc, auth })
       await v1.register(authRoutes, { auth })
       await v1.register(commentRoutes, { auth, comments })
       await v1.register(chatRoutes, { auth, chat })
+      await v1.register(stickerRoutes, { auth, stickers: new StickerService(pool) })
       await v1.register(xpRoutes, { auth, xp })
       await v1.register(premiumRoutes, { auth, premium })
       await v1.register(readingRoutes, { auth, reading })
