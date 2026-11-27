@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify'
 import { parseId } from '../core/util.js'
 import type { ProviderKey, Store } from '../core/types.js'
+import type { StorageGuard } from './storage/policy.js'
 import type { ScraperService } from './scraper.js'
 
 /**
@@ -28,7 +29,8 @@ export class Warmer {
       /** Seri yang `latestChapter`-nya berubah di daftar latest langsung diambil ulang (memicu push chapter baru). */
       watchNew?: boolean
       crawl?: { pages: number; size: number; firstDelayMs: number; everyMs: number; enrich: number; seeds: string[] }
-    }
+    },
+    private readonly guard?: StorageGuard
   ) {}
 
   start(firstDelayMs = 5_000) {
@@ -65,24 +67,33 @@ export class Warmer {
   async crawl() {
     const c = this.cfg.crawl
     if (!c) return
+    const policy = await this.guard?.policy().catch(() => undefined)
+    if (policy?.crawl === 'off') {
+      this.log.info({ level: policy.level }, 'catalog crawl skipped: storage pressure')
+      return
+    }
+    const light = policy?.crawl === 'light'
+    const pages = light ? Math.min(c.pages, 3) : c.pages
+    const seeds = light ? [] : c.seeds
+    const enrichLimit = Math.floor(c.enrich * (policy?.enrichScale ?? 1))
     const pause = () => new Promise(r => setTimeout(r, 300))
     const count = (r: unknown) => (r as { data?: unknown[] } | null)?.data?.length ?? 0
     let saved = 0
     for (const provider of this.providers) {
-      for (let page = 1; page <= c.pages && !this.stopped; page++) {
+      for (let page = 1; page <= pages && !this.stopped; page++) {
         const r = await this.svc.latest({ page, limit: c.size, provider }).catch(() => null)
         const n = count(r)
         saved += n
         if (n === 0) break
         await pause()
       }
-      for (const q of c.seeds) {
+      for (const q of seeds) {
         if (this.stopped) return
         saved += count(await this.svc.search(q, { page: 1, limit: c.size, provider }).catch(() => null))
         await pause()
       }
     }
-    for (const slug of c.seeds.map(s => s.replace(/[^a-z0-9]+/g, '-'))) {
+    for (const slug of seeds.map(s => s.replace(/[^a-z0-9]+/g, '-'))) {
       for (let page = 1; page <= 3 && !this.stopped; page++) {
         const r = await this.svc.byGenre(slug, { page, limit: c.size }).catch(() => null)
         if (count(r) === 0) break
@@ -91,11 +102,11 @@ export class Warmer {
     }
     // Detail untuk seri tanpa genre: 4 worker paralel.
     try {
-      const queue = await this.store.needingDetail(c.enrich)
+      const queue = enrichLimit > 0 ? await this.store.needingDetail(enrichLimit) : []
       await Promise.all(
         Array.from({ length: 4 }, async () => {
           for (let it = queue.shift(); it && !this.stopped; it = queue.shift()) {
-            await this.svc.refreshDetail(it.provider, it.ref).catch(() => undefined)
+            await this.svc.refreshDetail(it.provider, it.ref, false, true).catch(() => undefined)
           }
         })
       )
@@ -170,9 +181,11 @@ export class Warmer {
       if (this.cfg.watchNew) await this.watch(r?.data)
     }
     try {
-      for (const { provider, ref } of await this.store.needingDetail(this.cfg.enrich)) {
+      const policy = await this.guard?.policy().catch(() => undefined)
+      const enrichLimit = Math.floor(this.cfg.enrich * (policy?.enrichScale ?? 1))
+      for (const { provider, ref } of enrichLimit > 0 ? await this.store.needingDetail(enrichLimit) : []) {
         if (this.stopped) return
-        await this.svc.refreshDetail(provider, ref).catch(e => this.log.warn({ provider, ref, err: (e as Error).message }, 'warm detail failed'))
+        await this.svc.refreshDetail(provider, ref, false, true).catch(e => this.log.warn({ provider, ref, err: (e as Error).message }, 'warm detail failed'))
       }
       await this.store.prune()
     } catch (e) {

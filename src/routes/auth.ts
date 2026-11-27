@@ -4,12 +4,13 @@ import { MAX_AVATAR_BYTES, isJpeg } from '../core/util.js'
 import { MAX_GIF_AVATAR_BYTES, isGif } from '../core/premium.js'
 import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
 import type { AuthService } from '../services/auth.js'
+import { assertBlobAllowed, type StorageGuard } from '../services/storage/policy.js'
 
 const noStore = { 'cache-control': 'no-store' }
 const str = (max: number) => ({ type: 'string', maxLength: max }) as const
 const limit = (max: number) => ({ rateLimit: { max, timeWindow: '1 minute' } })
 
-export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app, { auth }) => {
+export const authRoutes: FastifyPluginAsync<{ auth: AuthService; storage?: StorageGuard }> = async (app, { auth, storage }) => {
   const reply200 = (reply: { headers: (h: Record<string, string>) => unknown }) => reply.headers(noStore)
 
   app.get('/auth/config', { schema: { tags: ['auth'], summary: 'Metode login yang aktif (untuk tampilan app)' } }, async (_req, reply) => {
@@ -38,11 +39,13 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     if (isGif(body)) {
       if (!user.premium) throw new AppError(403, 'PREMIUM_REQUIRED', 'Foto profil GIF khusus Premium')
       if (body.length > MAX_GIF_AVATAR_BYTES) throw new ValidationError('GIF terlalu besar (maks. 2 MB)')
+      await assertBlobAllowed(storage, body.length, MAX_GIF_AVATAR_BYTES)
       reply200(reply)
       return { data: await auth.setAvatar(user.id, body, 'image/gif') }
     }
     if (!isJpeg(body)) throw new ValidationError('Foto harus berformat JPEG')
     if (body.length > MAX_AVATAR_BYTES) throw new ValidationError('Foto terlalu besar (maks. 300 KB)')
+    await assertBlobAllowed(storage, body.length, MAX_AVATAR_BYTES)
     reply200(reply)
     return { data: await auth.setAvatar(user.id, body) }
   })

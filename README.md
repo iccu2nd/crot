@@ -59,6 +59,34 @@ Id unified: `<provider>:<id asli>` (`shinigami:<uuid>`, `lumos:<slug>`; chapter 
 ### Admin
 Aktif bila `ADMIN_TOKEN` diisi (tidak tampil di `/docs`, 10 request/menit): pengumuman (`POST/DELETE /admin/announcements`, header `x-admin-token`) dan moderasi pengguna/komentar/seri untuk owner (`/admin/users`, `/admin/comments`, ...). Akun owner tidak bisa diblokir/dibisukan/dihapus. Paksa keluar sesi: `POST /admin/users/:id/logout` (satu user) dan `POST /admin/logout-all` (semua user; admin pemanggil tetap masuk, kirim `{"includeSelf":true}` untuk ikut keluar).
 
+## Manajemen storage database (200 MB)
+
+Batas kapasitas dibaca dari `pg_database_size` (tabel + indeks + TOAST) dan dibandingkan dengan `STORAGE_LIMIT_MB` (default 200, hitungan desimal agar konservatif). Kapasitas fisik tetap terbatas: sistem ini memperlambat pertumbuhan, membuang data yang bisa diturunkan ulang, dan memperingatkan lebih awal, bukan membuat database tanpa batas.
+
+| Level | Pemakaian | Tindakan otomatis |
+|---|---|---|
+| ok / notice | < 80% | crawler penuh; cache chapter seri yang tak dibuka 90/60 hari dibersihkan |
+| warning | 80% | crawler ringan (3 halaman, tanpa seed), enrich 50%, batas unggahan foto/stiker 50%, seri usang 120 hari dibersihkan, peringatan |
+| high | 90% | crawler mati, chapter hanya diperbarui untuk seri yang sudah punya chapter, batas unggahan 25%, seri usang 60 hari dibersihkan |
+| critical | 95% | tulis katalog dihentikan, unggahan foto/stiker ditolak (HTTP 507), cache chapter dikosongkan bila `VACUUM FULL` tak muat, `/health` berstatus `degraded` |
+
+Akun, bookmark, pustaka, riwayat baca, XP, komentar, chat, foto profil, header, dan stiker pengguna tidak pernah dihapus otomatis. Penulisan data akun tetap berjalan di semua level (cadangan 5%). Pembersihan hanya menyentuh data yang bisa diambil ulang dari sumber: chapter seri yang tak dibuka/disimpan siapa pun, seri yang sudah lama hilang dari sumber, statistik view lama, laporan chapter rusak, pengumuman kedaluwarsa, pesanan Premium belum dibayar, dan stiker kembar yang tidak dirujuk pesan.
+
+Penghematan permanen: crawler dan enrich hanya menyimpan metadata seri + genre (daftar chapter hanya disimpan untuk seri yang dibuka pengguna, dipanaskan warmer, atau dipantau push); upsert katalog tidak menulis ulang baris yang tak berubah (jeda 10 menit untuk `last_seen_at`); stiker identik tidak disimpan dua kali; foto profil identik tidak ditulis ulang; indeks `series_norm_title_idx` yang redundan dihapus; autovacuum tabel panas dipercepat (migrasi 038).
+
+Pemantauan: pemeriksaan tiap menit, level + ramalan waktu menuju kritis (sampel per jam), peringatan ke log, riwayat `storage_events`, dan webhook opsional `STORAGE_ALERT_WEBHOOK_URL`. Pembersihan rutin tiap 6 jam (tiap 30 menit saat level warning ke atas).
+
+| Endpoint admin (owner JWT atau `x-admin-token`) | Fungsi |
+|---|---|
+| `GET /v1/admin/storage` | pemakaian, level, kebijakan aktif, tabel terbesar, pemakaian blob, ramalan, daftar backup |
+| `GET /v1/admin/storage/events` | riwayat level, pembersihan, backup |
+| `POST /v1/admin/storage/maintain` `{mode: "auto"\|"aggressive"}` | jalankan pembersihan sekarang |
+| `POST /v1/admin/storage/backups`, `GET /v1/admin/storage/backups[/:nama]` | buat, daftar, unduh backup |
+| `GET /v1/admin/storage/export` | backup langsung diunduh (juga untuk serverless) |
+| `GET /v1/internal/storage/cron` | cron Vercel (header `Authorization: Bearer $CRON_SECRET`) |
+
+Backup: tiap 24 jam ke `BACKUP_DIR` (snapshot konsisten, NDJSON gzip, diverifikasi setelah ditulis, simpan 7 harian + 4 mingguan). Isinya data pengguna dan kurasi admin (users termasuk foto/header, komentar, vote, XP, streak, riwayat, pustaka, stiker, pengumuman, pesanan, gambar chapter hasil perbaikan); katalog komik tidak dicadangkan karena bisa diambil ulang. Volume Docker ikut server yang sama, jadi unduh salinan ke luar server secara berkala (`/admin/storage/export`). Serverless tidak punya disk tetap: pakai endpoint export dari cron eksternal. Manual: `npm run backup`. Pulihkan ke database kosong atau yang sudah ada (hanya mengisi baris yang hilang, tidak menimpa): `npm run restore -- backups/mitoon-AAAAMMDD-JJMMDD.ndjson.gz`.
+
 ## Cara kerja singkat
 - **Cache:** L1 di memori + Redis, stale-while-revalidate + singleflight; Redis mati = cache dilewati, API tetap jalan. Respons gzip + ETag + `Cache-Control`/`s-maxage`. Rate limit di memori (300/menit per IP).
 - **Fallback:** list memanggil semua provider paralel dan hanya menunggu provider lambat `listGraceMs`; detail/chapter yang gagal dicari di provider lain (judul ternormalisasi, chapter dicocokkan lewat nomor). Circuit breaker per provider (5 gagal → buka 30 dtk). Tanpa Redis, detail dilayani dari PostgreSQL.

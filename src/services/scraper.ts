@@ -218,7 +218,7 @@ export class ScraperService {
         for (let it = queue.shift(); it; it = queue.shift()) {
           try {
             const { provider, ref } = parseId(it.id)
-            await this.refreshDetail(provider, ref)
+            await this.refreshDetail(provider, ref, false, true)
           } catch {
             /* gagal -> dicoba lagi oleh warmer (needingDetail) */
           } finally {
@@ -493,17 +493,17 @@ export class ScraperService {
     }
   }
 
-  private detailFrom(p: ProviderAdapter, ref: string, force = false) {
-    return this.unlessMissing(`d:${p.key}:${ref}`, force, () => this.detailCached(p, ref, force))
+  private detailFrom(p: ProviderAdapter, ref: string, force = false, lite = false) {
+    return this.unlessMissing(`d:${p.key}:${ref}`, force, () => this.detailCached(p, ref, force, lite))
   }
 
-  private detailCached(p: ProviderAdapter, ref: string, force: boolean) {
+  private detailCached(p: ProviderAdapter, ref: string, force: boolean, lite = false) {
     return this.o.cache.getOrSet<SeriesDetail>(
       `d2:${p.key}:${ref}`,
       this.o.cfg.ttl.detail,
       async () => {
         const d = await this.call(p, () => p.detail(ref))
-        await this.background(this.o.store.saveDetail(d), 'saveDetail')
+        await this.background(this.o.store.saveDetail(d, lite ? { chapters: false } : undefined), 'saveDetail')
         return d
       },
       // Cache kosong (Redis restart / TTL habis) tapi seri pernah diambil -> langsung dari PostgreSQL, refresh di background.
@@ -538,8 +538,8 @@ export class ScraperService {
   }
 
   /** Dipakai warmer: isi cache + DB tanpa menghitung view dan tanpa fallback. */
-  async refreshDetail(provider: ProviderKey, ref: string, force = false): Promise<void> {
-    await this.detailFrom(this.adapter(provider), ref, force)
+  async refreshDetail(provider: ProviderKey, ref: string, force = false, lite = false): Promise<void> {
+    await this.detailFrom(this.adapter(provider), ref, force, lite)
   }
 
   /** Seri yang sama di provider lain: dari DB (norm_title), jika kosong cari lewat search provider lain. */

@@ -320,6 +320,11 @@ export class AuthService {
 
   /** Simpan foto profil. JPEG untuk semua; GIF animasi (`mime` = image/gif) hanya dipanggil route untuk Premium. */
   async setAvatar(userId: number, img: Buffer, mime: 'image/jpeg' | 'image/gif' = 'image/jpeg'): Promise<AuthUser> {
+    const same = await this.pool.query('SELECT (avatar = $2::bytea AND avatar_mime = $3) AS same FROM users WHERE id = $1', [userId, img, mime])
+    if (same.rows[0]?.same === true) {
+      const current = await this.pool.query('SELECT ' + COLS + ' FROM users WHERE id = $1', [userId])
+      return toUser(current.rows[0], this.cfg.ownerEmails)
+    }
     const { rows } = await this.pool.query('UPDATE users SET avatar = $2, avatar_mime = $3, avatar_v = avatar_v + 1 WHERE id = $1 RETURNING ' + COLS, [userId, img, mime])
     if (!rows[0]) throw new UnauthorizedError('Akun tidak ditemukan')
     return toUser(rows[0], this.cfg.ownerEmails)

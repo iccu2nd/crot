@@ -12,7 +12,9 @@ services:
       PORT: "3000"
       DATABASE_URL: postgres://scraper:${POSTGRES_PASSWORD:?isi POSTGRES_PASSWORD di .env}@postgres:5432/scraper
       REDIS_URL: redis://redis:6379
+      BACKUP_DIR: /app/backups
     ports: ["${PORT:-3000}:3000"]
+    volumes: [backups:/app/backups]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_started }
@@ -42,3 +44,4 @@ services:
 
 volumes:
   pgdata:
+  backups:

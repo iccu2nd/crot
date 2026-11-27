@@ -23,6 +23,8 @@ import { readingRoutes } from './routes/reading.js'
 import { seriesRoutes } from './routes/series.js'
 import { stickerRoutes } from './routes/stickers.js'
 import { StickerService } from './services/stickers.js'
+import { StorageManager } from './services/storage/manager.js'
+import { storageRoutes } from './routes/storage.js'
 import { systemRoutes } from './routes/system.js'
 import { xpRoutes } from './routes/xp.js'
 import { AnnouncementRepo } from './services/announcements.js'
@@ -62,7 +64,8 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
     const applied = await migrate(pool)
     if (applied.length) log.info({ applied }, 'migrations applied')
   }
-  const store = new PgStore(pool)
+  const storage = new StorageManager(pool, log, cfg.storage, cfg.serverless)
+  const store = new PgStore(pool, storage)
   const push = new PushService(cfg.firebaseServiceAccount, app.log, store)
   if (push.configured) store.onNewChapters((s, chapters) => push.newChapter(s, chapters))
 
@@ -90,7 +93,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   // ---- domain ----
   const views = new ViewCounter(store, log, 15_000, cfg.serverless)
   const svc = new ScraperService({ adapters, cache: new Cache(redis, log), store, views, log, cfg })
-  const warmer = new Warmer(svc, store, cfg.providers, log, { ...cfg.warmer, watchNew: push.configured })
+  const warmer = new Warmer(svc, store, cfg.providers, log, { ...cfg.warmer, watchNew: push.configured }, storage)
 
   // ---- header keamanan di semua respons ----
   app.addHook('onSend', async (_req, reply, payload) => {
@@ -183,21 +186,22 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
 
   // ---- routes ----
   app.get('/', { schema: { hide: true } }, async (_req, reply) => (docs ? reply.redirect('/docs') : reply.send({ name: 'Unified Scraper API' })))
-  await app.register(systemRoutes, { store, redis })
+  await app.register(systemRoutes, { store, redis, storage })
   await app.register(
     async v1 => {
       await v1.register(catalogRoutes, { svc })
       await v1.register(seriesRoutes, { svc, auth })
-      await v1.register(authRoutes, { auth })
+      await v1.register(authRoutes, { auth, storage })
       await v1.register(commentRoutes, { auth, comments })
       await v1.register(chatRoutes, { auth, chat })
-      await v1.register(stickerRoutes, { auth, stickers: new StickerService(pool) })
+      await v1.register(stickerRoutes, { auth, stickers: new StickerService(pool, storage) })
       await v1.register(xpRoutes, { auth, xp })
-      await v1.register(premiumRoutes, { auth, premium })
+      await v1.register(premiumRoutes, { auth, premium, storage })
       await v1.register(readingRoutes, { auth, reading })
       await v1.register(libraryRoutes, { auth, library: new LibraryService(pool) })
       await v1.register(announcementRoutes, { repo: announcements })
       await v1.register(notificationRoutes, { auth, notifications: new NotificationService(pool) })
+      await v1.register(storageRoutes, { auth, storage, adminToken: cfg.adminToken, cronSecret: cfg.storage.cronSecret })
       await v1.register(adminRoutes, { auth, store, announcements, svc, push, adminToken: cfg.adminToken, ownerEmails: cfg.auth.ownerEmails })
     },
     { prefix: '/v1' }
@@ -207,10 +211,12 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   app.addHook('onReady', async () => {
     if (cfg.serverless) return // tanpa timer latar di serverless
     views.start()
+    storage.start()
     if (cfg.warmer.enabled) warmer.start()
   })
   app.addHook('onClose', async () => {
     warmer.stop()
+    storage.stop()
     await views.stop()
     await pool.end().catch(() => {})
     redis.disconnect()

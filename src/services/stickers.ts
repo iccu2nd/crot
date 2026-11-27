@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import type { Pool } from 'pg'
 import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
+import { assertBlobAllowed, type StorageGuard } from './storage/policy.js'
 
 export const STICKER_RE = /^\[\[stk:(\d{1,9})\]\]$/
 export const MAX_STICKER_BYTES = 400 * 1024
@@ -26,7 +28,10 @@ export async function assertStickerUsable(pool: Pool, userId: number, body: stri
 }
 
 export class StickerService {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly guard?: StorageGuard
+  ) {}
 
   async list(ownerId: number | null): Promise<{ id: number }[]> {
     const { rows } = await this.pool.query(
@@ -41,10 +46,17 @@ export class StickerService {
     if (!mime) throw new ValidationError('Format stiker harus PNG, WebP, JPEG, atau GIF')
     const buf = img as Buffer
     if (buf.length > MAX_STICKER_BYTES) throw new ValidationError('Stiker terlalu besar (maks. 400 KB)')
+    const hash = createHash('sha256').update(buf).digest()
+    const dup = await this.pool.query(
+      ownerId == null ? 'SELECT id FROM stickers WHERE owner_id IS NULL AND content_hash = $1 LIMIT 1' : 'SELECT id FROM stickers WHERE owner_id = $2 AND content_hash = $1 LIMIT 1',
+      ownerId == null ? [hash] : [hash, ownerId]
+    )
+    if (dup.rows[0]) return { id: Number(dup.rows[0].id) }
+    await assertBlobAllowed(this.guard, buf.length, MAX_STICKER_BYTES)
     const cap = ownerId == null ? MAX_GLOBAL : MAX_MINE
     const n = await this.pool.query(ownerId == null ? 'SELECT count(*)::int AS n FROM stickers WHERE owner_id IS NULL' : 'SELECT count(*)::int AS n FROM stickers WHERE owner_id = $1', ownerId == null ? [] : [ownerId])
     if (Number(n.rows[0]?.n ?? 0) >= cap) throw new AppError(409, 'LIMIT_REACHED', `Batas stiker tercapai (maks. ${cap})`)
-    const { rows } = await this.pool.query('INSERT INTO stickers (owner_id, image, mime) VALUES ($1, $2, $3) RETURNING id', [ownerId, buf, mime])
+    const { rows } = await this.pool.query('INSERT INTO stickers (owner_id, image, mime, content_hash) VALUES ($1, $2, $3, $4) RETURNING id', [ownerId, buf, mime, hash])
     return { id: Number(rows[0].id) }
   }
 

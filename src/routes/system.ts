@@ -1,8 +1,9 @@
 import type { FastifyPluginAsync } from 'fastify'
 import type { Redis } from 'ioredis'
 import type { Store } from '../core/types.js'
+import type { StorageGuard } from '../services/storage/policy.js'
 
-export const systemRoutes: FastifyPluginAsync<{ store: Store; redis: Redis | null }> = async (app, { store, redis }) => {
+export const systemRoutes: FastifyPluginAsync<{ store: Store; redis: Redis | null; storage?: StorageGuard }> = async (app, { store, redis, storage }) => {
   app.get(
     '/health',
     {
@@ -14,7 +15,8 @@ export const systemRoutes: FastifyPluginAsync<{ store: Store; redis: Redis | nul
         store.ping(),
         redis ? redis.ping().then(() => true, () => false) : Promise.resolve(false)
       ])
-      return { status: db && cache ? 'ok' : 'degraded', db, cache }
+      const level = storage ? (await storage.policy().catch(() => undefined))?.level ?? 'ok' : 'ok'
+      return { status: db && cache && level !== 'critical' ? 'ok' : 'degraded', db, cache, storage: level }
     }
   )
 }

@@ -4,12 +4,13 @@ import { MAX_HEADER_BYTES, MAX_HEADER_BLUR } from '../core/premium.js'
 import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
 import { isJpeg } from '../core/util.js'
 import type { AuthService } from '../services/auth.js'
+import { assertBlobAllowed, type StorageGuard } from '../services/storage/policy.js'
 import type { PremiumService, StylePatch } from '../services/premium.js'
 
 const noStore = { 'cache-control': 'no-store' }
 const limit = (max: number) => ({ rateLimit: { max, timeWindow: '1 minute' } })
 
-export const premiumRoutes: FastifyPluginAsync<{ auth: AuthService; premium: PremiumService }> = async (app, { auth, premium }) => {
+export const premiumRoutes: FastifyPluginAsync<{ auth: AuthService; premium: PremiumService; storage?: StorageGuard }> = async (app, { auth, premium, storage }) => {
   // Header profil: JPEG mentah (app sudah memperkecil, maks. ±450 KB). Parser milik plugin ini saja.
   app.addContentTypeParser('image/jpeg', { parseAs: 'buffer', bodyLimit: MAX_HEADER_BYTES }, (_req, body, done) => done(null, body))
 
@@ -56,6 +57,7 @@ export const premiumRoutes: FastifyPluginAsync<{ auth: AuthService; premium: Pre
     const body = req.body
     if (!isJpeg(body)) throw new ValidationError('Gambar harus berformat JPEG')
     if (body.length > MAX_HEADER_BYTES) throw new ValidationError('Gambar terlalu besar (maks. 450 KB)')
+    await assertBlobAllowed(storage, body.length, MAX_HEADER_BYTES)
     await premium.setHeader(me.id, body)
     void reply.headers(noStore)
     return { data: await auth.me(req.headers.authorization) }

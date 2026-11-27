@@ -4,6 +4,10 @@ import { PROVIDER_KEYS } from './core/types.js'
 const env = process.env
 const min = (n: number) => n * 60_000
 const hour = (n: number) => n * 3_600_000
+const positive = (v: string | undefined, fallback: number) => {
+  const n = Number(v)
+  return v !== undefined && v.trim() !== '' && Number.isFinite(n) && n > 0 ? n : fallback
+}
 
 /** true di Vercel (VERCEL=1 otomatis): tanpa timer latar, tulis DB inline, tanpa migrate saat runtime */
 const serverless = env.VERCEL === '1'
@@ -28,6 +32,26 @@ export const config = {
     googleClientId: env.GOOGLE_CLIENT_ID ?? '',
     /** Email owner (pisah koma). Akun yang masuk lewat Google dengan email terverifikasi ini otomatis dapat centang verified. */
     ownerEmails: (env.OWNER_EMAILS ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+  },
+  storage: {
+    enabled: env.STORAGE_MANAGER !== '0',
+    limitBytes: positive(env.STORAGE_LIMIT_MB, 200) * 1_000_000,
+    thresholds: { notice: 0.7, warning: 0.8, high: 0.9, critical: 0.95 },
+    sampleTtlMs: 30_000,
+    checkEveryMs: min(1),
+    routineEveryMs: hour(6),
+    pressureEveryMs: min(30),
+    alertWebhookUrl: env.STORAGE_ALERT_WEBHOOK_URL ?? '',
+    alertCooldownMs: hour(6),
+    cronSecret: env.CRON_SECRET ?? '',
+    backup: {
+      enabled: !serverless && env.BACKUP_ENABLED !== '0',
+      dir: env.BACKUP_DIR ?? 'backups',
+      everyMs: hour(24),
+      firstDelayMs: min(3),
+      keepDaily: positive(env.BACKUP_KEEP_DAILY, 7),
+      keepWeekly: positive(env.BACKUP_KEEP_WEEKLY, 4)
+    }
   },
   pgPoolMax: serverless ? 2 : 10,
   autoMigrate: !serverless,
@@ -63,3 +87,4 @@ export const config = {
   }
 }
 export type Config = typeof config
+export type StorageConfig = Config['storage']

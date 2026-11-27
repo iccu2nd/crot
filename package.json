@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": "22.x" },
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
@@ -11,7 +13,9 @@
     "migrate": "node dist/db/migrate-cli.js",
     "smoke": "tsx src/smoke.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "backup": "node dist/db/backup-cli.js",
+    "restore": "node dist/db/restore-cli.js"
   },
   "dependencies": {
     "@fastify/compress": "^8.0.1",

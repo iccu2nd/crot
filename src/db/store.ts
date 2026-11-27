@@ -2,6 +2,7 @@ import { levelFor, xpForLevel, XP_MAX } from '../core/xp.js'
 import type { Pool, PoolClient } from 'pg'
 import type { ChapterContent, ChapterSummary, DbPage, GenreFilters, GenreRow, SortKey, ProviderKey, SeriesDetail, SeriesSummary, SeriesStatus, SourceRef, Store } from '../core/types.js'
 import { normTitle, slugify } from '../core/util.js'
+import { OPEN_POLICY, type StorageGuard, type StoragePolicy } from '../services/storage/policy.js'
 
 type Row = Record<string, any>
 
@@ -22,7 +23,20 @@ ON CONFLICT (provider, ref) DO UPDATE SET
   latest_chapter = COALESCE(EXCLUDED.latest_chapter, series.latest_chapter),
   last_seen_at   = now(),
   updated_at     = now()
-RETURNING id, provider, ref`
+WHERE series.last_seen_at < now() - interval '10 minutes'
+   OR series.title IS DISTINCT FROM EXCLUDED.title
+   OR series.norm_title IS DISTINCT FROM EXCLUDED.norm_title
+   OR series.cover IS DISTINCT FROM (CASE WHEN EXCLUDED.cover ~ '^https?://' AND EXCLUDED.cover !~ 'data:' THEN EXCLUDED.cover ELSE series.cover END)
+   OR series.url IS DISTINCT FROM EXCLUDED.url
+   OR series.type IS DISTINCT FROM COALESCE(EXCLUDED.type, series.type)
+   OR series.status IS DISTINCT FROM COALESCE(EXCLUDED.status, series.status)
+   OR series.rating IS DISTINCT FROM COALESCE(EXCLUDED.rating, series.rating)
+   OR series.chapter_count IS DISTINCT FROM COALESCE(EXCLUDED.chapter_count, series.chapter_count)
+   OR series.latest_chapter IS DISTINCT FROM COALESCE(EXCLUDED.latest_chapter, series.latest_chapter)`
+
+const SERIES_IDS = `
+SELECT s.id, s.provider, s.ref FROM series s
+JOIN unnest($1::text[], $2::text[]) AS t(provider, ref) ON s.provider = t.provider AND s.ref = t.ref`
 
 const UPSERT_DETAIL = `
 INSERT INTO series (provider, ref, title, norm_title, cover, url, type, status, synopsis, author, artist, year,
@@ -81,12 +95,21 @@ const genrePairs = (names: string[]) => {
   return { slugs: [...map.keys()], names: [...map.values()] }
 }
 
+const clip = (v: string, max: number) => (v.length > max ? v.slice(0, max) : v)
+
 const dedupe = <T>(items: T[], key: (t: T) => string) => [...new Map(items.map(i => [key(i), i])).values()]
 
 export class PgStore implements Store {
   private newChaptersCb?: (series: { id: string; title: string }, chapters: ChapterSummary[]) => Promise<void> | void
 
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly guard?: StorageGuard
+  ) {}
+
+  private async policy(): Promise<StoragePolicy> {
+    return this.guard ? this.guard.policy().catch(() => OPEN_POLICY) : OPEN_POLICY
+  }
 
   onNewChapters(fn: (series: { id: string; title: string }, chapters: ChapterSummary[]) => Promise<void> | void) {
     this.newChaptersCb = fn
@@ -129,9 +152,10 @@ export class PgStore implements Store {
   async saveSummaries(items: SeriesSummary[]) {
     const rows = dedupe(items, i => i.id)
     if (!rows.length) return
+    if (!(await this.policy()).catalogWrites) return
     const ref = (s: SeriesSummary) => s.id.slice(s.provider.length + 1)
     await this.tx(async c => {
-      const { rows: saved } = await c.query<Row>(UPSERT_SUMMARIES, [
+      await c.query(UPSERT_SUMMARIES, [
         rows.map(s => s.provider),
         rows.map(ref),
         rows.map(s => s.title),
@@ -144,10 +168,13 @@ export class PgStore implements Store {
         rows.map(s => s.chapterCount),
         rows.map(s => s.latestChapter)
       ])
+      const withGenres = rows.filter(s => s.genres.length)
+      if (!withGenres.length) return
+      const { rows: saved } = await c.query<Row>(SERIES_IDS, [withGenres.map(s => s.provider), withGenres.map(ref)])
       const dbId = new Map(saved.map(r => [`${r.provider}:${r.ref}`, r.id as string]))
       const links: { sid: string; slug: string }[] = []
       const all = new Map<string, string>()
-      for (const s of rows) {
+      for (const s of withGenres) {
         const { slugs, names } = genrePairs(s.genres)
         slugs.forEach((slug, i) => {
           all.set(slug, names[i])
@@ -166,13 +193,15 @@ export class PgStore implements Store {
     })
   }
 
-  async saveDetail(d: SeriesDetail) {
+  async saveDetail(d: SeriesDetail, opts: { chapters?: boolean } = {}) {
+    const pol = await this.policy()
+    if (!pol.catalogWrites) return
     const ref = d.id.slice(d.provider.length + 1)
     let added: ChapterSummary[] = []
     await this.tx(async c => {
       const { rows } = await c.query<Row>(UPSERT_DETAIL, [
         d.provider, ref, d.title, normTitle(d.title), d.cover, d.url, d.type, d.status,
-        d.synopsis, d.author, d.artist, d.year, d.rating, d.chapters.length || d.chapterCount, d.latestChapter
+        clip(d.synopsis, 3000), clip(d.author, 300), clip(d.artist, 300), d.year, d.rating, d.chapters.length || d.chapterCount, d.latestChapter
       ])
       const id = rows[0].id as string
 
@@ -191,7 +220,9 @@ export class PgStore implements Store {
         )
       }
 
-      const chapters = dedupe(d.chapters, ch => ch.id)
+      const mode = opts.chapters === false ? 'none' : pol.chapterWrites
+      const keep = mode === 'all' || (mode === 'existing' && (await c.query('SELECT 1 FROM chapters WHERE series_id = $1 LIMIT 1', [id])).rows.length > 0)
+      const chapters = keep ? dedupe(d.chapters, ch => ch.id) : []
       if (chapters.length && this.newChaptersCb) {
         const known = new Set((await c.query<Row>('SELECT ref FROM chapters WHERE series_id = $1', [id])).rows.map(r => r.ref as string))
         if (known.size > 0) added = chapters.filter(ch => !known.has(ch.id.slice(d.provider.length + 1)))
@@ -203,7 +234,7 @@ export class PgStore implements Store {
           chapters.map(ch => ch.id.slice(d.provider.length + 1)),
           chapters.map(ch => n(ch.number)),
           chapters.map(ch => ch.number),
-          chapters.map(ch => ch.title),
+          chapters.map(ch => clip(ch.title, 300)),
           chapters.map(ch => ch.date)
         ])
       }
@@ -504,7 +535,8 @@ export class PgStore implements Store {
   }
 
   async prune() {
-    await this.pool.query(`DELETE FROM series_views WHERE day < CURRENT_DATE - 90`)
+    const { viewRetentionDays } = await this.policy()
+    await this.pool.query('DELETE FROM series_views WHERE day < CURRENT_DATE - $1::int', [viewRetentionDays])
   }
 
   // ---- Admin: kontrol penuh atas data di DB ----
