@@ -116,6 +116,11 @@ export interface Store {
   /** Gambar chapter yang sudah terverifikasi bisa dimuat (hasil perbaikan admin). */
   chapterLocal(provider: ProviderKey, ref: string): Promise<ChapterContent | null>
   saveChapterImages(provider: ProviderKey, ref: string, c: ChapterContent, source: ProviderKey): Promise<void>
+  /** Laporan chapter rusak (chapter_health). */
+  reportBrokenChapter(provider: string, ref: string, seriesProvider: string, seriesRef: string): Promise<void>
+  clearBrokenChapter(provider: string, ref: string): Promise<void>
+  /** ID seri ("provider:ref") yang semua chapternya dilaporkan rusak. */
+  brokenSeries(): Promise<string[]>
   searchLocal(q: string, p: DbPage): Promise<SeriesSummary[]>
   latestLocal(p: DbPage): Promise<SeriesSummary[]>
   popular(p: DbPage & { days: number }): Promise<SeriesSummary[]>

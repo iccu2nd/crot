@@ -100,7 +100,7 @@ function fakeStore(): Store {
   const noop = async () => undefined
   return {
     syncProviders: noop, saveSummaries: noop, saveDetail: noop, addViews: noop, prune: noop,
-    detailLocal: async () => null, findSeries: async () => null, siblings: async () => [], findChapter: async () => null, chapterLocal: async () => null, saveChapterImages: async () => {},
+    detailLocal: async () => null, findSeries: async () => null, siblings: async () => [], findChapter: async () => null, chapterLocal: async () => null, saveChapterImages: async () => {}, reportBrokenChapter: async () => {}, clearBrokenChapter: async () => {}, brokenSeries: async () => [],
     searchLocal: async () => [], latestLocal: async () => [], popular: async () => [], recommended: async () => [], genres: async () => [], byGenre: async () => [],
     needingDetail: async () => [], ping: async () => true
   } as unknown as Store
