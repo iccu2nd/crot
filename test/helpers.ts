@@ -1,6 +1,9 @@
 import type { FastifyBaseLogger } from 'fastify'
 import type { KV } from '../src/core/cache.js'
 
+// Tes tidak boleh membuka Chrome: solver Cloudflare dimatikan (dibaca saat dipanggil, bukan saat import).
+process.env.CF_SOLVER = '0'
+
 export const noopLog = new Proxy({}, { get: () => () => {} }) as unknown as FastifyBaseLogger
 
 export class MemoryKV implements KV {

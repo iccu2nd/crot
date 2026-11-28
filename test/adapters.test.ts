@@ -506,6 +506,13 @@ describe('komiku (scraping HTML)', () => {
     } finally { m.restore() }
   })
 
+  it('403 -> pesan error memuat cuplikan body (diagnosa), status upstream 403', async () => {
+    const m = mockFetch({ '/manga/z/': () => ({ status: 403, text: '<html><title>Attention Required! | Cloudflare</title><body>Sorry, you have been blocked</body></html>' }) })
+    try {
+      await assert.rejects(createKomiku().detail('z'), (e: any) => e.upstreamStatus === 403 && /HTTP 403/.test(e.message) && /Sorry, you have been blocked/.test(e.message))
+    } finally { m.restore() }
+  })
+
   it('404 -> NotFound; halaman tantangan Cloudflare -> error jelas', async () => {
     const m = mockFetch({ '/manga/x/': () => ({ status: 404 }), '/manga/y/': () => ({ text: '<html><title>Just a moment...</title></html>' }) })
     try {

@@ -1,5 +1,6 @@
 import https from 'node:https'
 import { NotFoundError, TimeoutError, UpstreamError } from '../core/errors.js'
+import * as cf from '../core/cfsolver.js'
 import { cid, isoDate, numOrNull, pathSegment, sid, splitOnce } from '../core/util.js'
 import type { ChapterContent, ChapterSummary, ProviderAdapter, SeriesDetail, SeriesStatus, SeriesSummary } from '../core/types.js'
 
@@ -77,30 +78,43 @@ async function resolveViaDoh(host: string): Promise<string> {
 
 const isNetworkDns = (e: unknown) => /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|fetch failed/i.test(`${(e as any)?.cause?.code ?? ''} ${(e as Error)?.message ?? ''}`)
 
-function reqHeaders(referer?: string): Record<string, string> {
+function reqHeaders(url: string, referer?: string): Record<string, string> {
+  // Bila solver sudah lolos tantangan, pakai UA + cookie browser itu (cf_clearance terikat ke UA dan IP).
+  const sess = cf.sessionFor(url)
+  const cookie = sess?.cookie || COOKIE
   return {
-    'user-agent': UA,
+    'user-agent': sess?.ua || UA,
     accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7',
     'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
     referer: referer ?? `${BASE}/`,
-    ...(COOKIE ? { cookie: COOKIE } : {})
+    ...(cookie ? { cookie } : {})
   }
 }
 
-function checkStatus(status: number, headers: { get(n: string): unknown }): void {
+/** Ringkasan diagnosa untuk status gagal: header Cloudflare + cuplikan awal body (tanpa tag). */
+function diag(headers: { get(n: string): unknown }, body: string): string {
+  const parts: string[] = []
+  const server = headers.get('server')
+  const ray = headers.get('cf-ray')
+  const mit = headers.get('cf-mitigated')
+  if (server) parts.push(`server: ${String(server)}`)
+  if (ray) parts.push(`cf-ray: ${String(ray)}`)
+  if (mit) parts.push(`cf-mitigated: ${String(mit)}`)
+  const snip = text(body).slice(0, 100)
+  return `${parts.length ? ` [${parts.join('; ')}]` : ''}${snip ? ` "${snip}"` : ''}`
+}
+
+function checkStatus(status: number, headers: { get(n: string): unknown }, body = ''): void {
   if (status === 404 || status === 410) throw new NotFoundError('Not found upstream')
-  if (status < 200 || status >= 300) {
-    const mit = headers.get('cf-mitigated')
-    throw new UpstreamError(`HTTP ${status}${mit ? ` [cf-mitigated: ${mit}]` : ''}`, status)
-  }
+  if (status < 200 || status >= 300) throw new UpstreamError(`HTTP ${status}${diag(headers, body)}`, status)
 }
 
 async function fetchOne(url: string, referer?: string): Promise<string> {
   let body: string
   try {
-    const res = await fetch(url, { headers: reqHeaders(referer), signal: AbortSignal.timeout(TIMEOUT_MS), redirect: 'follow' })
-    checkStatus(res.status, res.headers)
+    const res = await fetch(url, { headers: reqHeaders(url, referer), signal: AbortSignal.timeout(TIMEOUT_MS), redirect: 'follow' })
     body = await res.text()
+    checkStatus(res.status, res.headers, body)
   } catch (e) {
     if (e instanceof NotFoundError || e instanceof UpstreamError) throw e
     if ((e as Error)?.name === 'TimeoutError' || (e as Error)?.name === 'AbortError') throw new TimeoutError('Komiku timeout')
@@ -109,20 +123,20 @@ async function fetchOne(url: string, referer?: string): Promise<string> {
     const u = new URL(url)
     try {
       const ip = await resolveViaDoh(u.hostname)
-      const r = await httpsGet({ ip, servername: u.hostname, path: u.pathname + u.search, headers: reqHeaders(referer) })
-      checkStatus(r.status, { get: n => r.headers[n] })
+      const r = await httpsGet({ ip, servername: u.hostname, path: u.pathname + u.search, headers: reqHeaders(url, referer) })
+      checkStatus(r.status, { get: n => r.headers[n] }, r.body)
       body = r.body
     } catch (e2) {
       if (e2 instanceof NotFoundError || e2 instanceof UpstreamError) throw e2
       throw new TimeoutError(`Komiku tidak terjangkau (${(e2 as Error)?.message || 'error'})`)
     }
   }
-  if (blocked(body)) throw new UpstreamError('diblokir Cloudflare (halaman tantangan); isi KOMIKU_COOKIE + KOMIKU_UA', 403)
+  if (blocked(body)) throw new UpstreamError('diblokir Cloudflare (halaman tantangan)', 403)
   return body
 }
 
-/** GET dengan cadangan domain `komiku.id` (situs yang sama) bila domain utama gagal. 404 langsung dilempar. */
-async function http(url: string, referer?: string): Promise<string> {
+/** GET langsung (fetch) dengan cadangan domain `komiku.id` (situs yang sama) bila domain utama gagal. 404 langsung dilempar. */
+async function httpDirect(url: string, referer?: string): Promise<string> {
   const alt = /\/\/komiku\.org(?=[/?#]|$)/.test(url) ? [url.replace('//komiku.org', '//komiku.id')] : []
   let last: unknown
   for (const u of [url, ...alt]) {
@@ -134,6 +148,31 @@ async function http(url: string, referer?: string): Promise<string> {
     }
   }
   throw last
+}
+
+const solvable = (e: unknown) => e instanceof UpstreamError && (e.upstreamStatus === 403 || e.upstreamStatus === 503)
+
+/**
+ * GET dengan penanganan Cloudflare bertingkat:
+ *  1. fetch biasa  2. bila 403/503 -> solver (Chrome) ambil cf_clearance lalu fetch ulang
+ *  3. bila cookie masih ditolak -> ambil halaman lewat Chrome itu sendiri (dan ingat pilihan ini sementara).
+ */
+async function http(url: string, referer?: string): Promise<string> {
+  if (!cf.solverEnabled()) return httpDirect(url, referer)
+  if (cf.browserPreferred()) return cf.browserGet(url)
+  try {
+    return await httpDirect(url, referer)
+  } catch (e) {
+    if (!solvable(e)) throw e
+    await cf.solve(BASE) // gagal = SolverError (pesan jelas) dilempar apa adanya
+    try {
+      return await httpDirect(url, referer)
+    } catch (e2) {
+      if (!solvable(e2)) throw e2
+      cf.preferBrowser()
+      return cf.browserGet(url)
+    }
+  }
 }
 
 // ---------------------------------------------------------------- URL / slug
