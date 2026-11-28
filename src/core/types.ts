@@ -78,6 +78,8 @@ export interface ProviderAdapter {
   chapter(ref: string): Promise<ChapterContent>
   /** Opsional: katalog native dengan filter genre/format/status + sortir (saat ini Lumos). */
   browse?(o: BrowseOptions): Promise<SeriesSummary[]>
+  /** Opsional: halaman katalog LENGKAP (bukan hanya yang baru update) untuk crawler; kosong = habis. */
+  catalog?(o: { page: number; size: number }): Promise<SeriesSummary[]>
   /** Opsional: nama genre milik provider (diambil langsung dari situs). */
   listGenres?(): Promise<string[]>
   imageHeaders(): Record<string, string>

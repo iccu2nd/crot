@@ -62,6 +62,9 @@ export const config = {
   aggregateTimeoutMs: 5000,
   /** Daftar (latest/search): setelah provider PERTAMA menjawab dengan data, provider lain yang lambat hanya ditunggu sebatas ini (ms). 0 = tunggu semua. */
   listGraceMs: 900,
+  /** Search: pengguna menunggu hasil lengkap, jadi provider lambat (Kiryuu/Lumos butuh beberapa request) diberi waktu lebih lama. */
+  searchGraceMs: 3000,
+  searchTimeoutMs: 9000,
   /** Saat satu chapter dibuka, chapter berikutnya diambil lebih dulu di background (baca lanjut = instan). */
   prefetchNextChapter: true,
   primaryTimeoutMs: 10000,
@@ -72,7 +75,7 @@ export const config = {
     enrich: 20,
     maintainEvery: 4,
     /** Crawler katalog: genre hanya dibaca dari DB, jadi DB diisi dalam-dalam (banyak halaman tiap sumber) supaya filter genre berisi banyak seri. */
-    crawl: { pages: 15, size: 50, firstDelayMs: 20_000, everyMs: hour(6), enrich: 40, seeds: ['action', 'adventure', 'comedy', 'drama', 'fantasy', 'horror', 'isekai', 'martial arts', 'mystery', 'romance', 'school life', 'sci-fi', 'slice of life', 'supernatural'] }
+    crawl: { pages: 15, catalogPages: 120, genrePages: 4, size: 50, firstDelayMs: 20_000, everyMs: hour(6), enrich: 40, seeds: ['action', 'adventure', 'comedy', 'drama', 'fantasy', 'horror', 'isekai', 'martial arts', 'mystery', 'romance', 'school life', 'sci-fi', 'slice of life', 'supernatural'] }
   },
   /** fresh = dilayani langsung, stale = dilayani + refresh background / saat upstream gagal */
   ttl: {

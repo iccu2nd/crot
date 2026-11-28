@@ -45,11 +45,11 @@ function toSummary(m: Raw): SeriesSummary | null {
   }
 }
 
-async function list(q: string, page: number, size: number, type?: string): Promise<SeriesSummary[]> {
+async function list(q: string, page: number, size: number, type?: string, all = false): Promise<SeriesSummary[]> {
   const qs = new URLSearchParams({ page: String(page), page_size: String(size), sort: 'latest', sort_order: 'desc' })
   if (q) qs.set('q', q)
-  // Tanpa kata kunci = "terbaru": hanya seri yang baru update, seperti halaman utama situs.
-  else qs.set('is_update', 'true')
+  // Tanpa kata kunci = "terbaru": hanya seri yang baru update, seperti halaman utama situs (`all` = seluruh katalog, untuk crawler).
+  else if (!all) qs.set('is_update', 'true')
   if (type && FORMATS.has(type.toLowerCase())) qs.set('format', type.toLowerCase())
   const res = await api(`/v1/manga/list?${qs}`)
   return compact((res.data ?? []).map(toSummary))
@@ -104,7 +104,9 @@ export function createShinigami(): ProviderAdapter {
     name: 'Shinigami',
     baseUrl: BASE,
 
-    search: (q, { page, limit }) => list(q, page, limit),
+    // Judul pencarian diminta lebih banyak per halaman (min. 30) supaya hasil tidak sedikit.
+    search: (q, { page, limit }) => list(q, page, Math.min(50, Math.max(limit, 30))),
+    catalog: ({ page, size }) => list('', page, size, undefined, true),
     latest: ({ page, limit, type }) => list('', page, limit, type),
 
     async detail(ref): Promise<SeriesDetail> {

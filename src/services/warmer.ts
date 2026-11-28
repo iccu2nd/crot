@@ -28,7 +28,7 @@ export class Warmer {
       maintainEvery?: number
       /** Seri yang `latestChapter`-nya berubah di daftar latest langsung diambil ulang (memicu push chapter baru). */
       watchNew?: boolean
-      crawl?: { pages: number; size: number; firstDelayMs: number; everyMs: number; enrich: number; seeds: string[] }
+      crawl?: { pages: number; catalogPages?: number; genrePages?: number; size: number; firstDelayMs: number; everyMs: number; enrich: number; seeds: string[] }
     },
     private readonly guard?: StorageGuard
   ) {}
@@ -87,14 +87,27 @@ export class Warmer {
         if (n === 0) break
         await pause()
       }
+      // Katalog LENGKAP (bukan hanya yang baru update): semua seri + genre-nya masuk DB, jadi filter genre & pencarian lokal berisi seluruh isi provider.
+      const seenIds = new Set<string>()
+      for (let page = 1; page <= (light ? Math.min(c.catalogPages ?? 0, 10) : c.catalogPages ?? 0) && !this.stopped; page++) {
+        const ids = await this.svc.catalogPage(provider, page, c.size).catch(() => [] as string[])
+        const fresh = ids.filter(id => !seenIds.has(id))
+        fresh.forEach(id => seenIds.add(id))
+        saved += fresh.length
+        if (!fresh.length) break // habis, atau situs mengulang halaman terakhir
+        await pause()
+      }
       for (const q of seeds) {
         if (this.stopped) return
         saved += count(await this.svc.search(q, { page: 1, limit: c.size, provider }).catch(() => null))
         await pause()
       }
     }
-    for (const slug of seeds.map(s => s.replace(/[^a-z0-9]+/g, '-'))) {
-      for (let page = 1; page <= 3 && !this.stopped; page++) {
+    // Semua genre yang dikenal (DB + daftar genre provider), bukan hanya seed dasar; halaman genre native (Lumos/Kiryuu) ditarik live ke DB.
+    const known = light ? [] : ((await this.svc.genres().catch(() => null))?.data ?? []).map(g => g.slug)
+    const genreSlugs = [...new Set([...seeds.map(s => s.replace(/[^a-z0-9]+/g, '-')), ...known])]
+    for (const slug of genreSlugs) {
+      for (let page = 1; page <= (c.genrePages ?? 3) && !this.stopped; page++) {
         const r = await this.svc.byGenre(slug, { page, limit: c.size }).catch(() => null)
         if (count(r) === 0) break
         await pause()

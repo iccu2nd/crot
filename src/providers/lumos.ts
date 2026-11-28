@@ -368,8 +368,16 @@ export function createLumos(): ProviderAdapter {
         return compact<SeriesSummary>(rows.map(toSummary))
       }
       const viaBrowse = (s: AbortSignal) => browse({ page: 1, sort: 'latest', q: query }, s)
-      return (await settle(['api', 'browse'], [viaApi, viaBrowse], signal)).slice(0, limit)
+      // Instant search hanya memuat segelintir hasil; katalog `/browse?q=` lebih lengkap. Keduanya digabung (bukan siapa cepat),
+      // gagal salah satu tetap memberi hasil dari yang lain.
+      const res = await Promise.allSettled([viaApi(signal), viaBrowse(signal)])
+      const rows = res.flatMap(r => (r.status === 'fulfilled' ? r.value : []))
+      if (!rows.length && res.every(r => r.status === 'rejected')) return settle(['api', 'browse'], [viaApi, viaBrowse], budget(LIST_BUDGET_MS))
+      return [...new Map(rows.map(s => [s.id, s])).values()].slice(0, Math.max(limit, 40))
     },
+
+    /** Katalog penuh untuk crawler: `/browse` terbaru, halaman demi halaman. */
+    catalog: ({ page }) => browse({ page, sort: 'latest' }),
 
     /** Ukuran halaman ditentukan upstream; `limit` tidak berpengaruh. API home-latest, cadangan katalog terbaru. */
     async latest({ page }) {

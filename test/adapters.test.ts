@@ -28,7 +28,7 @@ describe('shinigami', () => {
       assert.equal(s.status, 'ongoing')
       assert.equal(s.latestChapter, '12')
       assert.ok(m.calls[0].startsWith('https://api.shinigami.io/v1/manga/list'))
-      assert.ok(m.calls[0].includes('q=shini') && m.calls[0].includes('page_size=10'))
+      assert.ok(m.calls[0].includes('q=shini') && m.calls[0].includes('page_size=30')) // minimal 30 per halaman agar hasil tidak sedikit
       assert.equal((await a.latest({ page: 1, limit: 10, type: 'manhwa' })).length, 1)
       assert.ok(m.calls[1].includes('is_update=true') && m.calls[1].includes('format=manhwa') && !m.calls[1].includes('q='))
       const d = await a.detail('abc')
@@ -212,6 +212,17 @@ describe('lumos (ketahanan: mirror lambat/diblokir)', () => {
   })
 })
 
+describe('shinigami catalog', () => {
+  it('catalog: seluruh katalog (tanpa is_update / q) untuk crawler', async () => {
+    const m = mockFetch({ '/v1/manga/list': () => ({ json: { retcode: 0, data: [{ manga_id: 'a', title: 'A', status: 1, taxonomy: { Genre: [{ name: 'Action' }] } }] } }) })
+    try {
+      const r = await createShinigami().catalog!({ page: 3, size: 50 })
+      assert.deepEqual([r[0].id, r[0].genres], ['shinigami:a', ['Action']])
+      assert.ok(m.calls[0].includes('page=3') && m.calls[0].includes('page_size=50') && !m.calls[0].includes('is_update') && !m.calls[0].includes('q='))
+    } finally { m.restore() }
+  })
+})
+
 describe('kiryuu (scraping HTML)', () => {
   const B = 'https://v7.kiryuu.to'
   const card = (slug: string, title: string) => `<a href="${B}/manga/${slug}/" class="flex"><img src="${B}/wp-content/uploads/${slug}.png" alt="${title}"><div><h3>${title}</h3><p>Sinopsis ${title}</p></div></a>`
@@ -233,27 +244,102 @@ describe('kiryuu (scraping HTML)', () => {
     <img src="https://cdn.kiryuu.io/kuma/solo-leveling/chapter-01/1.jpg"><img data-src="https://cdn.kiryuu.io/kuma/solo-leveling/chapter-01/2.jpg" src="x.gif">
     <img src="${B}/wp-content/uploads/rekomendasi.png"><img alt="Kiryuu ID" src="https://blogger.googleusercontent.com/img/ad.jpeg"></html>`
 
-  it('search: ajax (nonce dari beranda) + advanced-search digabung, widget disaring', async () => {
+  const nonceForm = `<input type="hidden" name="search_nonce" value="abc123def4"><input name="x" value="y">`
+
+  it('search: modal + katalog advanced_search (2 halaman upstream) + /?s= digabung, tanpa duplikat, widget disaring', async () => {
     const m = mockFetch({
+      'action=get_nonce': () => ({ text: nonceForm }),
+      'action=advanced_search': () => ({ text: `${card('solo-leveling', 'Solo Leveling')}${card('solo-farming', 'Solo Farming')}${card('solo-necromancer', 'Solo Necromancer')}` }),
       'action=search': () => ({ text: `<div id="searchResults">${card('solo-leveling', 'Solo Leveling')}${card('solo-necromancer', 'Solo Necromancer')}</div>` }),
-      '/advanced-search/': () => ({ text: `${card('solo-leveling', 'Solo Leveling')}${card('solo-max-level-newbie', 'Solo Max-Level Newbie')}${card('unrelated', 'Widget Populer')}` }),
+      '/?s=solo': () => ({ text: `${card('solo-leveling', 'Solo Leveling')}${card('solo-max-level-newbie', 'Solo Max-Level Newbie')}${card('unrelated', 'Widget Populer')}` }),
       [`${B}/`]: () => ({ text: home })
     })
     try {
       const r = await createKiryuu().search('solo', { page: 1, limit: 10 })
-      assert.deepEqual(r.map(x => x.id), ['kiryuu:solo-leveling', 'kiryuu:solo-necromancer', 'kiryuu:solo-max-level-newbie'])
+      assert.deepEqual(r.map(x => x.id), ['kiryuu:solo-leveling', 'kiryuu:solo-necromancer', 'kiryuu:solo-farming', 'kiryuu:solo-max-level-newbie'])
       assert.equal(r[0].title, 'Solo Leveling')
       assert.equal(r[0].cover, `${B}/wp-content/uploads/solo-leveling.png`)
       assert.ok(m.calls.some(u => u.includes('nonce=26aeda56eb&action=search')))
-      assert.ok(m.calls.some(u => u.includes('search_term=solo')))
+      assert.ok(m.calls.some(u => u.includes('/?s=solo')))
+      assert.equal(m.calls.filter(u => u.includes('action=advanced_search')).length, 2) // halaman upstream 1 & 2
+      assert.equal(m.calls.filter(u => u.includes('action=get_nonce')).length, 1) // nonce dipakai bersama
     } finally { m.restore() }
   })
 
-  it('latest: kartu dengan link chapter diutamakan + chapter terbaru', async () => {
-    const m = mockFetch({ [`${B}/`]: () => ({ text: home }) })
+  it('search halaman 2 -> halaman upstream 3 & 4; nonce ditolak (balasan "0") diperbarui sekali', async () => {
+    let n = 0
+    const bodies: FormData[] = []
+    const orig = globalThis.fetch
+    const m = mockFetch({ 'action=get_nonce': () => ({ text: nonceForm }), '/?s=solo&': () => ({ text: '' }), '/?s=solo': () => ({ text: '' }) })
+    const base = globalThis.fetch
+    globalThis.fetch = (async (input: any, init: any) => {
+      if (String(input).includes('action=advanced_search')) {
+        bodies.push(init.body as FormData)
+        return new Response(n++ === 0 ? '0' : card('solo-farming', 'Solo Farming'), { status: 200 })
+      }
+      return base(input, init)
+    }) as typeof fetch
+    try {
+      const r = await createKiryuu().search('solo', { page: 2, limit: 10 })
+      assert.deepEqual(r.map(x => x.id), ['kiryuu:solo-farming'])
+      const pages = bodies.map(b => b.get('page')).sort()
+      assert.ok(pages.includes('3') && pages.includes('4'))
+      assert.equal(bodies[0].get('query'), 'solo')
+      assert.equal(bodies[0].get('genre'), '[]')
+      assert.equal(bodies[0].get('nonce'), 'abc123def4')
+      assert.ok(m.calls.some(u => u.includes('action=get_nonce'))) // dipaksa ambil ulang setelah balasan "0"
+    } finally { globalThis.fetch = orig; m.restore() }
+  })
+
+  it('search: advanced_search gagal -> tetap ada hasil dari modal / WP', async () => {
+    const m = mockFetch({
+      'action=advanced_search': () => ({ status: 500 }),
+      'action=get_nonce': () => ({ status: 500 }),
+      'action=search': () => ({ text: card('solo-leveling', 'Solo Leveling') }),
+      '/?s=solo': () => ({ text: '' }),
+      [`${B}/`]: () => ({ text: home })
+    })
+    try {
+      const r = await createKiryuu().search('solo', { page: 1, limit: 10 })
+      assert.deepEqual(r.map(x => x.id), ['kiryuu:solo-leveling'])
+    } finally { m.restore() }
+  })
+
+  it('browse + listGenres: filter genre/tipe/status/sortir lewat advanced_search', async () => {
+    const terms = { genre: [{ name: 'Action', slug: 'action' }, { name: '4-Koma', slug: '4-koma' }], type: [], status: [] }
+    const bodies: FormData[] = []
+    const orig = globalThis.fetch
+    const m = mockFetch({ 'action=get_nonce': () => ({ text: nonceForm }), '/advanced-search/': () => ({ text: `<script>var searchTerms = ${JSON.stringify(terms)};</script>` }) })
+    const base = globalThis.fetch
+    globalThis.fetch = (async (input: any, init: any) => {
+      if (String(input).includes('action=advanced_search')) {
+        bodies.push(init.body as FormData)
+        return new Response(card('solo-leveling', 'Solo Leveling'), { status: 200 })
+      }
+      return base(input, init)
+    }) as typeof fetch
+    try {
+      const a = createKiryuu()
+      assert.deepEqual(await a.listGenres!(), ['Action', '4-Koma'])
+      const r = await a.browse!({ page: 2, sort: 'az', genre: '4-koma', type: 'manhwa', status: 'hiatus' })
+      assert.equal(r[0].id, 'kiryuu:solo-leveling')
+      assert.deepEqual([r[0].type, r[0].status, r[0].genres], ['manhwa', 'hiatus', ['4-Koma']])
+      const b = bodies[0]
+      assert.deepEqual([b.get('page'), b.get('genre'), b.get('type'), b.get('status'), b.get('orderby'), b.get('order')], ['2', '["4-koma"]', '["manhwa"]', '["on-hiatus"]', 'title', 'asc'])
+      assert.deepEqual(await a.browse!({ page: 1, sort: 'latest', genre: 'tidak-ada' }), [])
+    } finally { globalThis.fetch = orig; m.restore() }
+  })
+
+  it('latest: kartu dengan link chapter diutamakan + chapter terbaru; halaman 2 dari katalog updated', async () => {
+    const m = mockFetch({
+      'action=get_nonce': () => ({ text: nonceForm }),
+      'action=advanced_search': () => ({ text: card('page-two', 'Page Two') }),
+      [`${B}/`]: () => ({ text: home })
+    })
     try {
       const r = await createKiryuu().latest({ page: 1, limit: 10 })
       assert.deepEqual(r.map(x => [x.id, x.latestChapter, x.cover]), [['kiryuu:solo-leveling', '179.6', `${B}/c.png`]])
+      assert.deepEqual((await createKiryuu().latest({ page: 2, limit: 10 })).map(x => x.id), ['kiryuu:page-two'])
     } finally { m.restore() }
   })
 

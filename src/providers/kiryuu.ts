@@ -1,6 +1,6 @@
 import { NotFoundError, TimeoutError, UpstreamError } from '../core/errors.js'
-import { cid, isoDate, numOrNull, pathSegment, sid, splitOnce } from '../core/util.js'
-import type { ChapterContent, ChapterSummary, ProviderAdapter, SeriesDetail, SeriesStatus, SeriesSummary } from '../core/types.js'
+import { cid, isoDate, memo, numOrNull, pathSegment, sid, slugify, splitOnce } from '../core/util.js'
+import type { BrowseOptions, ChapterContent, ChapterSummary, ProviderAdapter, SeriesDetail, SeriesStatus, SeriesSummary } from '../core/types.js'
 
 const KEY = 'kiryuu'
 // Kiryuu sering pindah domain (v1..v7); ubah di sini atau lewat env KIRYUU_BASE.
@@ -10,7 +10,6 @@ const UA = process.env.KIRYUU_UA || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) A
 const COOKIE = process.env.KIRYUU_COOKIE || ''
 const TIMEOUT_MS = 8000
 const NONCE_TTL_MS = 30 * 60_000
-const LATEST_PATH = '/advanced-search/?orderby=updated'
 
 type Raw = Record<string, any>
 
@@ -32,7 +31,7 @@ const byNumber = (a: { number: string }, b: { number: string }) => (parseFloat(b
 const BLOCKED = /just a moment|cf-browser-verification|attention required|enable javascript and cookies/i
 const blocked = (body: string) => body.length < 15000 && (BLOCKED.test(body) || (/challenge-platform/i.test(body) && /cf_chl_opt/i.test(body)))
 
-async function http(path: string, o: { method?: 'GET' | 'POST'; body?: string; headers?: Record<string, string>; signal?: AbortSignal } = {}): Promise<string> {
+async function http(path: string, o: { method?: 'GET' | 'POST'; body?: string | FormData; headers?: Record<string, string>; signal?: AbortSignal } = {}): Promise<string> {
   const timeout = AbortSignal.timeout(TIMEOUT_MS)
   let res: Response
   try {
@@ -238,10 +237,9 @@ async function searchAjax(q: string): Promise<SeriesSummary[]> {
   return parseCards(html).map(toSummary)
 }
 
+/** Pencarian WordPress bawaan (SearchAction di JSON-LD situs): dirender server, berbeda dari /advanced-search/ yang dimuat JS. */
 async function searchPage(q: string, page: number): Promise<SeriesSummary[]> {
-  const qs = new URLSearchParams({ search_term: q })
-  if (page > 1) qs.set('page', String(page))
-  const html = await http(`/advanced-search/?${qs}`)
+  const html = await http(`${page > 1 ? `/page/${page}` : ''}/?${new URLSearchParams({ s: q })}`)
   const tokens = q.toLowerCase().split(/\s+/).filter(Boolean)
   // Halaman ini juga memuat widget (populer/rekomendasi): buang yang tidak cocok dengan kata kunci.
   return parseCards(html)
@@ -251,23 +249,160 @@ async function searchPage(q: string, page: number): Promise<SeriesSummary[]> {
 
 const dedupe = (list: SeriesSummary[]) => [...new Map(list.map(s => [s.id, s])).values()]
 
-async function search(q: string, page: number, limit: number): Promise<SeriesSummary[]> {
-  if (page > 1) return (await searchPage(q, page)).slice(0, limit)
-  const [ajax, adv] = await Promise.allSettled([searchAjax(q), searchPage(q, 1)])
-  const rows = dedupe([...(ajax.status === 'fulfilled' ? ajax.value : []), ...(adv.status === 'fulfilled' ? adv.value : [])])
-  if (!rows.length) {
-    const failed = [ajax, adv].find((r): r is PromiseRejectedResult => r.status === 'rejected')
-    if (failed && [ajax, adv].every(r => r.status === 'rejected')) throw failed.reason
+// ---- katalog /advanced-search/ (endpoint yang dipakai halaman Advanced Search situs) ----
+// Halaman itu dimuat JS: nonce diambil dari `admin-ajax.php?action=get_nonce&type=search_form` (input `search_nonce`),
+// lalu hasil (kartu seri, satu halaman per request) diminta lewat POST FormData ke `admin-ajax.php?action=advanced_search`.
+// Pencarian modal (`action=search`) hanya memuat segelintir hasil; endpoint ini memuat daftar penuh + paginasi + filter.
+const ORDERBY = { latest: 'updated', popular: 'popular', rating: 'rating', az: 'title' } as const
+/** Tipe di filter situs (`searchTerms.type`). */
+const SITE_TYPES = ['comic', 'indonesian', 'manga', 'mangatoon', 'manhua', 'manhwa', 'novel']
+/** Status unified -> slug status situs (`searchTerms.status`: cancelled, completed, on-hiatus, ongoing, unknown). */
+const SITE_STATUS: Record<string, string> = { ongoing: 'ongoing', completed: 'completed', hiatus: 'on-hiatus', cancelled: 'cancelled', unknown: 'unknown' }
+/** Berapa halaman upstream digabung untuk satu halaman API (agar hasil pencarian banyak). */
+const ADV_PAGES = 2
+
+interface AdvQuery {
+  query?: string
+  page?: number
+  genre?: string[]
+  type?: string[]
+  status?: string[]
+  orderby?: string
+  order?: 'asc' | 'desc'
+}
+
+let searchNonce = { v: '', at: 0 }
+let searchNonceP: Promise<string> | null = null
+async function getSearchNonce(force = false): Promise<string> {
+  if (!force && searchNonce.v && Date.now() - searchNonce.at < NONCE_TTL_MS) return searchNonce.v
+  if (force || !searchNonceP) {
+    const p = (async () => {
+      const html = await http('/wp-admin/admin-ajax.php?type=search_form&action=get_nonce', { headers: { 'hx-request': 'true', accept: '*/*' } })
+      const input = html.match(/<input\b[^>]*name\s*=\s*["']search_nonce["'][^>]*>/i)?.[0]
+      const v = (input && attr(input, 'value')) || html.match(/search_nonce["'][^>]*value\s*=\s*["']([0-9a-zA-Z]{6,})["']/i)?.[1] || html.match(/["']nonce["']\s*:\s*["']([0-9a-zA-Z]{6,})["']/i)?.[1]
+      if (!v) throw new UpstreamError('search_nonce Kiryuu tidak ditemukan')
+      searchNonce = { v, at: Date.now() }
+      return v
+    })()
+    searchNonceP = p
+    const clear = () => void (searchNonceP === p && (searchNonceP = null))
+    p.then(clear, clear)
   }
-  return rows.slice(0, limit)
+  return searchNonceP
+}
+
+/** Satu halaman katalog advanced-search -> kartu seri. Nonce kedaluwarsa (403/400 atau balasan `0`/`-1`) diperbarui sekali. */
+async function advanced(q: AdvQuery): Promise<SeriesSummary[]> {
+  const run = async (force: boolean) => {
+    const f = new FormData()
+    f.append('nonce', await getSearchNonce(force))
+    f.append('inclusion', 'OR')
+    f.append('exclusion', 'OR')
+    f.append('page', String(q.page ?? 1))
+    f.append('genre', JSON.stringify(q.genre ?? []))
+    f.append('genre_exclude', '[]')
+    f.append('author', '[]')
+    f.append('artist', '[]')
+    f.append('project', '0')
+    f.append('type', JSON.stringify(q.type ?? []))
+    f.append('status', JSON.stringify(q.status ?? []))
+    f.append('order', q.order ?? 'desc')
+    f.append('orderby', q.orderby ?? 'popular')
+    f.append('query', q.query ?? '')
+    const html = await http('/wp-admin/admin-ajax.php?action=advanced_search', {
+      method: 'POST',
+      body: f,
+      headers: { accept: '*/*', origin: BASE, referer: `${BASE}/advanced-search/`, 'x-requested-with': 'XMLHttpRequest' }
+    })
+    if (/^\s*-?\d\s*$/.test(html)) throw new UpstreamError('nonce pencarian ditolak', 403)
+    return html
+  }
+  let html: string
+  try {
+    html = await run(false)
+  } catch (e) {
+    if (e instanceof NotFoundError || (e instanceof UpstreamError && e.upstreamStatus !== 403 && e.upstreamStatus !== 400)) throw e
+    html = await run(true)
+  }
+  return parseCards(html).map(toSummary)
+}
+
+const ok = <T>(r: PromiseSettledResult<T[]>): T[] => (r.status === 'fulfilled' ? r.value : [])
+
+async function search(q: string, page: number, limit: number): Promise<SeriesSummary[]> {
+  // Satu halaman API = ADV_PAGES halaman upstream berurutan (tanpa tumpang-tindih antar halaman API).
+  const first = (page - 1) * ADV_PAGES + 1
+  const adv = Array.from({ length: ADV_PAGES }, (_, i) => advanced({ query: q, page: first + i, orderby: 'popular' }))
+  // Hasil modal (paling relevan) didahulukan, lalu katalog, lalu pencarian WordPress sebagai cadangan.
+  const jobs = [...(page === 1 ? [searchAjax(q)] : []), ...adv, searchPage(q, page)]
+  const res = await Promise.allSettled(jobs)
+  const rows = dedupe(res.flatMap(ok))
+  if (!rows.length) {
+    const failed = res.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+    if (failed && res.every(r => r.status === 'rejected')) throw failed.reason
+  }
+  // Ukuran halaman ditentukan upstream (seperti Lumos); `limit` hanya batas bawah agar tidak memotong hasil.
+  return rows.slice(0, Math.max(limit, ADV_PAGES * 30 + 10))
 }
 
 async function latest(page: number, limit: number): Promise<SeriesSummary[]> {
-  const html = page > 1 ? await http(`${LATEST_PATH}&page=${page}`) : await http('/')
-  const cards = parseCards(html)
+  // /advanced-search/ dimuat JS (HTML-nya kosong); halaman > 1 diambil dari katalog `orderby=updated`.
+  if (page > 1) return advanced({ page, orderby: ORDERBY.latest })
+  let cards: Card[] = []
+  try {
+    cards = parseCards(await http('/'))
+  } catch (e) {
+    if (e instanceof NotFoundError) throw e
+  }
   // Beranda memuat beberapa bagian; kartu "update terbaru" adalah yang punya link chapter.
   const updated = cards.filter(c => c.latestLabel)
-  return (updated.length ? updated : cards).map(toSummary).slice(0, limit)
+  const rows = (updated.length ? updated : cards).map(toSummary).slice(0, limit)
+  return rows.length ? rows : advanced({ page: 1, orderby: ORDERBY.latest })
+}
+
+// ---- genre & katalog berfilter ----
+/** Genre situs (`var searchTerms` di /advanced-search/): slug unified -> slug & nama situs. Di-memo 1 jam. */
+const siteGenres = memo(async () => {
+  const html = await http('/advanced-search/')
+  const raw = html.match(/var\s+searchTerms\s*=\s*(\{[\s\S]*?\})\s*;/)?.[1]
+  const map = new Map<string, { slug: string; name: string }>()
+  if (!raw) return map
+  let terms: Record<string, unknown>
+  try {
+    terms = JSON.parse(raw)
+  } catch {
+    return map
+  }
+  const g = terms.genre
+  for (const t of (Array.isArray(g) ? g : Object.values((g as object) ?? {})) as Raw[]) {
+    const slug = String(t?.slug ?? '')
+    const name = text(t?.name ?? slug)
+    if (!slug || !name) continue
+    map.set(slugify(name) || slug, { slug, name })
+    map.set(slug, { slug, name })
+  }
+  return map
+}, 3_600_000, 1)
+
+/** Katalog native: filter genre / tipe / status + sortir (halaman 1:1 dengan halaman upstream). */
+async function browse(o: BrowseOptions): Promise<SeriesSummary[]> {
+  let genre: { slug: string; name: string } | undefined
+  if (o.genre) {
+    genre = (await siteGenres('').catch(() => undefined))?.get(o.genre)
+    if (!genre) return [] // genre ini tidak dikenal Kiryuu
+  }
+  const type = o.type && SITE_TYPES.includes(o.type) ? o.type : ''
+  const status = o.status ? SITE_STATUS[o.status] : undefined
+  const rows = await advanced({
+    query: o.q,
+    page: o.page,
+    genre: genre ? [genre.slug] : [],
+    type: type ? [type] : [],
+    status: status ? [status] : [],
+    orderby: ORDERBY[o.sort] ?? 'popular',
+    order: o.sort === 'az' ? 'asc' : 'desc'
+  })
+  return rows.map(r => ({ ...r, type: type || r.type, status: statusOf(o.status) ?? r.status, genres: genre ? [genre.name] : r.genres }))
 }
 
 // ---- detail ----
@@ -522,6 +657,11 @@ export function createKiryuu(): ProviderAdapter {
     name: 'Kiryuu',
     baseUrl: BASE,
     search: (q, { page, limit }) => search(q, page, limit),
+    browse,
+    catalog: ({ page }) => advanced({ page, orderby: ORDERBY.latest }),
+    async listGenres() {
+      return [...new Set([...(await siteGenres('')).values()].map(g => g.name))]
+    },
     latest: ({ page, limit }) => latest(page, limit),
     detail: ref => detail(ref),
     chapter: ref => chapter(ref),

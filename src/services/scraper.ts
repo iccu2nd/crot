@@ -51,6 +51,8 @@ interface PageQuery {
 type ServiceConfig = Pick<Config, 'ttl' | 'aggregateTimeoutMs' | 'primaryTimeoutMs'> & {
   serverless?: boolean
   listGraceMs?: number
+  searchGraceMs?: number
+  searchTimeoutMs?: number
   prefetchNextChapter?: boolean
 }
 const offsetOf = (q: PageQuery) => (q.page - 1) * q.limit
@@ -267,20 +269,21 @@ export class ScraperService {
   private async fanOut(
     q: PageQuery,
     run: (p: ProviderAdapter) => Promise<{ value: SeriesSummary[]; state: CacheState }>,
-    local: () => Promise<SeriesSummary[]>
+    local: () => Promise<SeriesSummary[]>,
+    wait: { graceMs?: number; timeoutMs?: number } = {}
   ): Promise<ListResult> {
     type Outcome = { key: ProviderKey; items: SeriesSummary[]; state: CacheState | null; status: ProviderStatus; error?: string }
     const pending = this.pick(q.provider)
     const settled = await settleWithGrace<Outcome>(
       pending.map(async (p): Promise<Outcome> => {
         try {
-          const r = await withDeadline(run(p), this.o.cfg.aggregateTimeoutMs)
+          const r = await withDeadline(run(p), wait.timeoutMs ?? this.o.cfg.aggregateTimeoutMs)
           return { key: p.key, items: r.value, state: r.state, status: r.state === 'stale' ? 'stale' : 'ok' }
         } catch (e) {
           return { key: p.key, items: [], state: null, status: statusOf(e), error: (e as Error)?.message }
         }
       }),
-      this.o.cfg.listGraceMs ?? 0,
+      wait.graceMs ?? this.o.cfg.listGraceMs ?? 0,
       o => o.state !== null && o.items.length > 0,
       i => ({ key: pending[i].key, items: [], state: null, status: 'timeout' })
     )
@@ -307,8 +310,35 @@ export class ScraperService {
     }
   }
 
-  search(q: string, o: PageQuery): Promise<ListResult> {
-    return this.fanOut(o, p => this.listFrom(p, 'search', { q, ...o }), () => this.o.store.searchLocal(q, dbPage(o)))
+  /**
+   * Pencarian lengkap: semua provider live (grace/timeout lebih longgar dari list biasa) + DB tersimpan.
+   * Seri yang pernah di-crawl tapi tidak muncul di hasil live (mis. upstream membatasi jumlah hasil) ditambahkan di belakang.
+   */
+  async search(q: string, o: PageQuery): Promise<ListResult> {
+    const wait = { graceMs: this.o.cfg.searchGraceMs ?? this.o.cfg.listGraceMs, timeoutMs: this.o.cfg.searchTimeoutMs ?? this.o.cfg.aggregateTimeoutMs }
+    const localP = withDeadline(Promise.resolve().then(() => this.o.store.searchLocal(q, dbPage(o))), 2500).catch((): SeriesSummary[] => [])
+    const live = await this.fanOut(o, p => this.listFrom(p, 'search', { q, ...o }), () => localP, wait)
+    if (live.meta.source === 'db') return live // semua provider gagal: sudah murni data DB
+    const extra = await localP
+    if (!extra.length) return live
+    const have = new Map(live.data.map(s => [normTitle(s.title), s]))
+    const add: SeriesSummary[] = []
+    for (const s of extra) {
+      const key = normTitle(s.title)
+      const hit = key ? have.get(key) : undefined
+      if (hit) {
+        hit.sources.push(...s.sources.filter(x => !hit.sources.some(y => y.id === x.id)))
+        hit.genres = [...new Set([...hit.genres, ...s.genres])]
+        hit.cover ||= s.cover
+      } else {
+        if (key) have.set(key, s)
+        add.push(s)
+      }
+    }
+    if (!add.length) return live
+    this.fillCovers(add)
+    const data = [...live.data, ...add]
+    return { ...live, data, meta: { ...live.meta, count: data.length } }
   }
 
   latest(o: PageQuery & { type?: string }): Promise<ListResult> {
@@ -386,8 +416,8 @@ export class ScraperService {
       const rows = await this.o.store.genres()
       const seen = new Set(rows.map(r => r.slug))
       // Genre yang dikenal provider tapi belum pernah muncul di DB (mis. Lumos) ikut ditampilkan.
-      for (const a of this.adapters.values()) {
-        const names = a.listGenres ? await withDeadline(a.listGenres(), 3000).catch(() => []) : []
+      const lists = await Promise.all([...this.adapters.values()].map(a => (a.listGenres ? withDeadline(a.listGenres(), 6000).catch((): string[] => []) : Promise.resolve([] as string[]))))
+      for (const names of lists) {
         for (const name of names) {
           const slug = slugify(name)
           if (slug && !seen.has(slug)) {
@@ -399,6 +429,15 @@ export class ScraperService {
       return rows
     })
     return { data: value, source: state === 'hit' ? 'cache' : state === 'stale' ? 'stale' : 'db' }
+  }
+
+  /** Satu halaman katalog LENGKAP provider (untuk crawler) -> disimpan ke DB. Mengembalikan id seri di halaman itu ([] = habis / tak didukung). */
+  async catalogPage(provider: ProviderKey, page: number, size: number): Promise<string[]> {
+    const p = this.adapters.get(provider)
+    if (!p?.catalog) return []
+    const items = await this.call(p, () => p.catalog!({ page, size }))
+    await this.o.store.saveSummaries(items).catch(e => this.o.log.warn({ err: (e as Error).message }, 'save catalog failed'))
+    return items.map(s => s.id)
   }
 
   /** Provider dengan katalog native (Lumos) ditarik live dulu -> tersimpan ke DB lengkap dengan genre. */

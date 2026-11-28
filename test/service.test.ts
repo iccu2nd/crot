@@ -66,6 +66,17 @@ describe('ScraperService list', () => {
     assert.equal((await svc.search('solo', q)).meta.source, 'cache')
   })
 
+  it('search: hasil live + seri tersimpan di DB yang belum ada di hasil live ditambahkan (sources digabung)', async () => {
+    const store = fakeStore({
+      searchLocal: async () => [item('kiryuu', 'k1', 'Solo Leveling'), item('kiryuu', 'k2', 'Solo Farming In The Tower')]
+    })
+    const { svc } = make([adapter('shinigami').a, adapter('lumos', { titles: ['Other Solo'] }).a], store)
+    const r = await svc.search('solo', q)
+    assert.deepEqual(r.data.map(d => d.title), ['Solo Leveling', 'Other Solo', 'Solo Farming In The Tower'])
+    assert.deepEqual(r.data[0].sources.map(s => s.id), ['shinigami:0', 'kiryuu:k1'])
+    assert.equal(r.meta.count, 3)
+  })
+
   it('satu provider gagal -> hasil provider lain, degraded', async () => {
     const { svc } = make([adapter('shinigami', { fail: true }).a, adapter('lumos').a])
     const r = await svc.latest(q)
