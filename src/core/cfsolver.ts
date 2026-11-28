@@ -43,6 +43,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 const sessions = new Map<string, CfSession>()
 let failedAt = 0
+let lastFailure = ''
 let inflight: Promise<CfSession> | null = null
 let browserModeUntil = 0
 
@@ -158,7 +159,8 @@ export function solve(origin: string, force = false): Promise<CfSession> {
   if (!force && cur && Date.now() - cur.at < TTL_MS) return Promise.resolve(cur)
   if (inflight) return inflight
   if (Date.now() - failedAt < COOLDOWN_MS) {
-    return Promise.reject(new SolverError('solver Cloudflare sedang jeda setelah gagal; coba lagi sebentar'))
+    const wait = Math.ceil((COOLDOWN_MS - (Date.now() - failedAt)) / 1000)
+    return Promise.reject(new SolverError(`solver Cloudflare jeda ${wait}s setelah gagal: ${lastFailure}`, /fatal:/.test(lastFailure)))
   }
   const p = serial(async () => {
     try {
@@ -180,8 +182,10 @@ export function solve(origin: string, force = false): Promise<CfSession> {
       return s
     } catch (e) {
       failedAt = Date.now()
+      const err = e instanceof SolverError ? e : new SolverError(`solver Cloudflare gagal: ${(e as Error)?.message || 'error'}`)
+      lastFailure = (err.fatal ? 'fatal: ' : '') + err.message
       await closeBrowser()
-      throw e instanceof SolverError ? e : new SolverError(`solver Cloudflare gagal: ${(e as Error)?.message || 'error'}`)
+      throw err
     } finally {
       inflight = null
     }
