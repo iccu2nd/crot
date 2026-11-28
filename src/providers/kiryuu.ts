@@ -376,36 +376,111 @@ async function detail(slug: string): Promise<SeriesDetail> {
 }
 
 // ---- chapter ----
-const PAGE_BAD = /googleusercontent|blogger\.com|gravatar|\/avatar|logo|banner|favicon|emoji|\/ads?\/|pixel|spacer|loading|placeholder/i
+const PAGE_BAD = /googleusercontent|blogger\.com|gravatar|\/avatar|\/logos?[-_./]|banner|favicon|emoji|\/ads?\/|pixel|spacer|\/loading|placeholder|\.svg(?:[?#]|$)/i
+const dirOf = (u: string) => u.split(/[?#]/)[0].replace(/\/[^/]*$/, '')
+const IMG_ATTRS = ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-cfsrc', 'src']
+
+function tagImages(html: string): string[] {
+  const out: string[] = []
+  for (const tag of html.match(/<img\b[^>]*>/gi) ?? []) {
+    if (/kiryuu/i.test(attr(tag, 'alt') ?? '')) continue
+    const srcset = attr(tag, 'srcset')?.split(',').map(x => x.trim().split(/\s+/)[0])
+    const u = [...IMG_ATTRS.map(n => attr(tag, n)), srcset?.[0]].map(abs).find(x => x && !PAGE_BAD.test(x) && (IMG_EXT.test(x) || /\/(?:kuma|uploads?|images?|cdn|storage|chapter)/i.test(x)))
+    if (u) out.push(u)
+  }
+  return out
+}
+
+/** URL gambar yang ditanam di script/JSON (reader berbasis JS atau lazy-load penuh). */
+function scriptImages(html: string): string[] {
+  const out: string[] = []
+  for (const m of html.matchAll(/https?:(?:\\?\/){2}[^"'\s<>\\]+(?:\\\/[^"'\s<>\\]+)*\.(?:jpe?g|png|webp|avif|gif)/gi)) {
+    const u = abs(m[0].replace(/\\\//g, '/'))
+    if (u && !PAGE_BAD.test(u)) out.push(u)
+  }
+  return out
+}
+
+/** Halaman komik = gambar terbanyak yang berbagi satu folder (kuma/<seri>/chapter-xx/N.jpg); gambar lain (rekomendasi, iklan, logo) terbuang. */
+function mainGroup(list: string[]): string[] {
+  const uniq = [...new Set(list)]
+  const groups = new Map<string, string[]>()
+  for (const u of uniq) groups.set(dirOf(u), [...(groups.get(dirOf(u)) ?? []), u])
+  const best = [...groups.values()].sort((a, b) => b.length - a.length)[0] ?? []
+  return best.length >= 2 || uniq.length <= 1 ? best : uniq
+}
+
+function altPageImages(html: string): string[] {
+  const rows: { n: number; u: string }[] = []
+  for (const tag of html.match(/<img\b[^>]*>/gi) ?? []) {
+    const n = (attr(tag, 'alt') ?? '').match(/\bpage\s*(\d+)\s*$/i)?.[1]
+    const u = [...IMG_ATTRS.map(k => attr(tag, k))].map(abs).find(x => x && !PAGE_BAD.test(x))
+    if (n && u) rows.push({ n: Number(n), u })
+  }
+  return [...new Map(rows.sort((a, b) => a.n - b.n).map(r => [r.u, r.u])).values()]
+}
 
 function pageImages(html: string): string[] {
-  const all: string[] = []
-  for (const tag of html.match(/<img\b[^>]*>/gi) ?? []) {
-    const u = [attr(tag, 'data-src'), attr(tag, 'data-lazy-src'), attr(tag, 'data-original'), attr(tag, 'src')].map(abs).find(Boolean)
-    if (u && IMG_EXT.test(u) && !PAGE_BAD.test(u) && !/kiryuu/i.test(attr(tag, 'alt') ?? '')) all.push(u)
+  const alt = altPageImages(html)
+  if (alt.length >= 2) return alt
+  const fromTags = mainGroup(tagImages(html))
+  if (fromTags.length >= 3) return fromTags
+  const fromScript = mainGroup(scriptImages(html))
+  return fromScript.length > fromTags.length ? fromScript : fromTags
+}
+
+const MAX_PAGES = 200
+const BATCH = 8
+
+/** Pola URL halaman dari og:image / JSON-LD (mis. `https://cdn.kiryuu.io/K/<seri>/140/1.jpg`); HTML mentah hanya memuat halaman 1, sisanya dirender JS. */
+function pagePattern(html: string): ((n: number) => string) | null {
+  const meta = html.match(/<meta\b[^>]*property=["']og:image["'][^>]*>/i)?.[0]
+  const u = abs(meta && attr(meta, 'content')) || abs(html.match(/"thumbnailUrl"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\\//g, '/'))
+  const m = u.match(/^(.*\/)(\d+)(\.(?:jpe?g|png|webp|avif|gif))(\?.*)?$/i)
+  if (!m || /\/wp-content\//i.test(m[1])) return null
+  const pad = m[2].length > 1 && m[2].startsWith('0') ? m[2].length : 0
+  return n => `${m[1]}${pad ? String(n).padStart(pad, '0') : n}${m[3]}${m[4] ?? ''}`
+}
+
+async function imageExists(url: string): Promise<boolean> {
+  for (let i = 0; i < 2; i++) {
+    try {
+      const res = await fetch(url, { headers: { ...imageHeaders(), range: 'bytes=0-0' }, signal: AbortSignal.timeout(6000), redirect: 'follow' })
+      const type = (res.headers.get('content-type') ?? '').toLowerCase()
+      await res.body?.cancel()
+      if (res.status === 404 || res.status === 410) return false
+      if ((res.status === 200 || res.status === 206) && (type.startsWith('image/') || type === 'application/octet-stream')) return true
+      return false
+    } catch {}
   }
-  if (!all.length) {
-    // Beberapa tema menanam daftar gambar sebagai JSON (`"images":[...]`).
-    const arr = html.match(/["']images["']\s*:\s*\[([^\]]+)\]/i)?.[1]
-    for (const m of arr?.matchAll(/["']([^"']+)["']/g) ?? []) {
-      const u = abs(m[1].replace(/\\\//g, '/'))
-      if (u && IMG_EXT.test(u) && !PAGE_BAD.test(u)) all.push(u)
-    }
+  return false
+}
+
+/** Tebak halaman 1..N dengan memeriksa file berurutan sampai ada yang tidak ada. */
+async function probePages(at: (n: number) => string): Promise<string[]> {
+  const out: string[] = []
+  const deadline = Date.now() + 9000
+  for (let start = 1; start <= MAX_PAGES && Date.now() < deadline; start += BATCH) {
+    const urls = Array.from({ length: BATCH }, (_, i) => at(start + i))
+    const ok = await Promise.all(urls.map(imageExists))
+    const miss = ok.indexOf(false)
+    out.push(...urls.slice(0, miss < 0 ? BATCH : miss))
+    if (miss >= 0) break
   }
-  const uniq = [...new Set(all)]
-  const reader = uniq.filter(u => !/\/wp-content\/uploads\//i.test(u))
-  const pool = reader.length ? reader : uniq
-  // Halaman komik bernama berurutan (1.jpg, 2.jpg, ...); gambar lain (rekomendasi, iklan) dibuang bila pola itu ada.
-  const numbered = pool.filter(u => /\/\d+\.(?:jpe?g|png|webp|avif|gif)(?:[?#]|$)/i.test(u))
-  return numbered.length ? numbered : pool
+  return out
 }
 
 async function chapter(ref: string): Promise<ChapterContent> {
   const [slug, ch] = splitOnce(ref)
   const url = `${BASE}/manga/${pathSegment(slug)}/${pathSegment(ch)}/`
   const html = await http(url)
-  const images = pageImages(html)
-  if (!images.length) throw new UpstreamError('gambar chapter tidak ditemukan')
+  let images = pageImages(html)
+  if (images.length < 3) {
+    const at = pagePattern(html)
+    const probed = at ? await probePages(at) : []
+    if (probed.length > images.length) images = probed
+  }
+  if (!images.length) throw new UpstreamError(`gambar chapter tidak ditemukan (html ${html.length}B, ${(html.match(/<img\b/gi) ?? []).length} img)`)
 
   let prev: string | null = null
   let next: string | null = null
@@ -439,7 +514,7 @@ async function chapter(ref: string): Promise<ChapterContent> {
   }
 }
 
-const imageHeaders = (): Record<string, string> => ({ 'user-agent': UA, referer: `${BASE}/` })
+const imageHeaders = (): Record<string, string> => ({ 'user-agent': UA, referer: `${BASE}/`, origin: BASE, accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' })
 
 export function createKiryuu(): ProviderAdapter {
   return {

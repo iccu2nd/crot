@@ -298,4 +298,42 @@ describe('kiryuu (scraping HTML)', () => {
       await assert.rejects(createKiryuu().detail('y'), (e: any) => e.status === 404)
     } finally { m.restore() }
   })
+
+  it('chapter: nama file tidak berurutan / lazy-load / hanya di script tetap dapat gambar', async () => {
+    const d = 'https://cdn.kiryuu.io/kuma/sex-fantasy/chapter-04'
+    const lazy = `<img class="logo" src="${B}/wp-content/uploads/logo.png"><img src="https://cdn.kiryuu.io/kuma/other/chapter-01/1.jpg"><img src="https://cdn.kiryuu.io/kuma/other/chapter-01/2.jpg">` +
+      ['a-01.webp', 'a-02.webp', 'a-03.webp', 'a-04.webp'].map(f => `<img src="data:image/gif;base64,R0lG" data-src="${d}/${f}" class="lazy">`).join('') + '<img src="https://cdn.kiryuu.io/kuma/ad/z.jpg">'
+    const m = mockFetch({ '/chapter-4.386445/': () => ({ text: `<html>${lazy}</html>` }), '/chapter-5.1/': () => ({ text: `<html><script>var d={"images":["${d.replace(/\//g, '\\/')}\\/1.jpg","${d.replace(/\//g, '\\/')}\\/2.jpg","${d.replace(/\//g, '\\/')}\\/3.jpg"]}</script></html>` }) })
+    try {
+      const a = createKiryuu()
+      assert.deepEqual((await a.chapter('sex-fantasy:chapter-4.386445')).images, ['a-01', 'a-02', 'a-03', 'a-04'].map(n => `${d}/${n}.webp`))
+      assert.deepEqual((await a.chapter('sex-fantasy:chapter-5.1')).images, [1, 2, 3].map(n => `${d}/${n}.jpg`))
+    } finally { m.restore() }
+  })
+
+  it('chapter: HTML mentah hanya og:image -> halaman ditebak berurutan dari pola CDN; alt "Page N" diurutkan', async () => {
+    const dir = 'https://cdn.kiryuu.io/K/kanojo-no-tomodachi/140'
+    const original = globalThis.fetch
+    const probed: string[] = []
+    globalThis.fetch = (async (input: any, init?: any) => {
+      const url = String(input)
+      if (url.startsWith(dir)) {
+        probed.push(url)
+        const n = Number(url.match(/\/(\d+)\.jpg/)?.[1])
+        return new Response('x', { status: n <= 11 ? 206 : 404, headers: { 'content-type': n <= 11 ? 'image/jpeg' : 'text/html' } })
+      }
+      if (url.includes('/chapter-140.847257/')) return new Response(`<html><head><meta property="og:image" content="${dir}/1.jpg"></head><body><div id="reader"></div></body></html>`)
+      if (url.includes('/chapter-141.1/')) return new Response(`<html><img src="${dir}/2.jpg" alt="Kanojo - Page 2"><img src="${dir}/1.jpg" alt="Kanojo - Page 1"><img src="${dir}/3.jpg" alt="Kanojo - Page 3"></html>`)
+      return new Response('no route', { status: 599 })
+    }) as typeof fetch
+    try {
+      const a = createKiryuu()
+      const c = await a.chapter('kanojo-no-tomodachi:chapter-140.847257')
+      assert.deepEqual(c.images, Array.from({ length: 11 }, (_, i) => `${dir}/${i + 1}.jpg`))
+      assert.equal(c.number, '140')
+      const before = probed.length
+      assert.deepEqual((await a.chapter('kanojo-no-tomodachi:chapter-141.1')).images, [1, 2, 3].map(n => `${dir}/${n}.jpg`))
+      assert.equal(probed.length, before, 'alt Page N cukup, tanpa probing')
+    } finally { globalThis.fetch = original }
+  })
 })
