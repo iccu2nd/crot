@@ -74,7 +74,7 @@ export const storageRoutes: FastifyPluginAsync<{
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-')
     return reply
       .header('content-type', 'application/gzip')
-      .header('content-disposition', `attachment; filename="mitoon-${stamp}.ndjson.gz"`)
+      .header('content-disposition', `attachment; filename="koyami-${stamp}.ndjson.gz"`)
       .header('cache-control', 'no-store')
       .send(await storage.exportStream())
   })

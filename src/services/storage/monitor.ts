@@ -147,9 +147,9 @@ export class StorageMonitor implements StorageGuard {
       else this.log.info({ level: next, usedBytes: snap.usedBytes }, text)
       await this.event('level', { from: previous, to: next, percent: Number((snap.ratio * 100).toFixed(2)) })
       if (rising && levelRank(next) >= levelRank('warning')) {
-        await this.alert(next, `[MiToon] ${text}. Pembersihan otomatis dijalankan; jika tetap tinggi, periksa data pengguna terbesar di panel admin.`)
+        await this.alert(next, `[Koyami] ${text}. Pembersihan otomatis dijalankan; jika tetap tinggi, periksa data pengguna terbesar di panel admin.`)
       } else if (!rising && levelRank(previous) >= levelRank('warning') && levelRank(next) < levelRank('warning')) {
-        await this.alert('ok', `[MiToon] Storage database kembali aman: ${describe(snap)}`, true)
+        await this.alert('ok', `[Koyami] Storage database kembali aman: ${describe(snap)}`, true)
       }
     } catch (e) {
       this.log.warn({ err: (e as Error).message }, 'storage level notification failed')
@@ -247,7 +247,7 @@ export class StorageMonitor implements StorageGuard {
     const f = await this.forecast()
     if (f.hoursToCritical === null || f.hoursToCritical > 24) return
     const hours = Math.max(1, Math.round(f.hoursToCritical))
-    const text = `[MiToon] Perkiraan storage database mencapai level kritis dalam ±${hours} jam (naik ${formatBytes(f.bytesPerHour)}/jam). Periksa pertumbuhan tabel di panel admin.`
+    const text = `[Koyami] Perkiraan storage database mencapai level kritis dalam ±${hours} jam (naik ${formatBytes(f.bytesPerHour)}/jam). Periksa pertumbuhan tabel di panel admin.`
     this.log.warn({ hoursToCritical: f.hoursToCritical, bytesPerHour: f.bytesPerHour }, text)
     await this.event('forecast', { hoursToCritical: f.hoursToCritical, bytesPerHour: f.bytesPerHour })
     await this.alert('forecast', text)
