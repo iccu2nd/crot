@@ -1,6 +1,7 @@
 /** Adapter diuji dengan fetch ter-mock; bentuk payload mengikuti field yang dibaca scraper asli. */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { createKiryuu } from '../src/providers/kiryuu.js'
 import { createLumos } from '../src/providers/lumos.js'
 import { createShinigami } from '../src/providers/shinigami.js'
 import { mockFetch } from './helpers.js'
@@ -207,6 +208,94 @@ describe('lumos (ketahanan: mirror lambat/diblokir)', () => {
     const m = hostFetch({ 'https://': () => new Response('nope', { status: 404 }) })
     try {
       await assert.rejects(createLumos().detail('tidak-ada'), (e: any) => e.status === 404)
+    } finally { m.restore() }
+  })
+})
+
+describe('kiryuu (scraping HTML)', () => {
+  const B = 'https://v7.kiryuu.to'
+  const card = (slug: string, title: string) => `<a href="${B}/manga/${slug}/" class="flex"><img src="${B}/wp-content/uploads/${slug}.png" alt="${title}"><div><h3>${title}</h3><p>Sinopsis ${title}</p></div></a>`
+  const home = `<html><script>hx-post="${B}/wp-admin/admin-ajax.php?nonce=26aeda56eb&#038;action=search"</script>
+    <a href="${B}/manga/popular-x/"><img src="${B}/p.png"><h3>Popular X</h3></a>
+    <div><a href="${B}/manga/solo-leveling/"><img data-src="${B}/c.png" src="data:image/gif;base64,AAAA"><h3>Solo Leveling</h3></a>
+    <a href="${B}/manga/solo-leveling/chapter-179.6.425255/">Chapter 179.6</a><a href="${B}/manga/solo-leveling/chapter-12.1111111/">Chapter 12</a></div></html>`
+  const detailHtml = `<html><head><meta property="og:image" content="${B}/wp-content/uploads/cover.png"></head><body>
+    <img src="https://secure.gravatar.com/avatar/?s=96&amp;d=mm"><h1>Solo Leveling</h1>
+    <div><span>Status</span><span>Ongoing</span></div><div><span>Type</span><span>Manhwa</span></div><div><span>Author</span><span>Chugong</span></div><div>Released: 2018</div>
+    <h2>Synopsis</h2><p>E-class hunter Jinwoo Sung is the weakest.</p><p>Second paragraph.</p><h2>Chapters</h2>
+    <a href="${B}/genre/action/">Action</a><a href="${B}/genre/fantasy/">Fantasy</a>
+    <a href="${B}/manga/solo-leveling/chapter-179.6.425255/"><span>Chapter 179.6</span><span>1 year ago</span></a>
+    <a href="${B}/manga/solo-leveling/chapter-0.147843/"><span>Chapter 0</span><time datetime="2021-06-01T00:00:00Z">x</time></a>
+    <a href="${B}/manga/solo-leveling/chapter-0.147843/">Baca Pertama</a>
+    <a href="${B}/manga/other/chapter-1.999999/">Chapter 1</a><a href="${B}/advanced-search/">Manga Lists</a></body></html>`
+  const reader = `<html><link rel="next" href="${B}/manga/solo-leveling/chapter-2.200002/">
+    <a href="${B}/manga/solo-leveling/chapter-0.147843/#">Prev</a><a href="${B}/manga/solo-leveling/chapter-0.147843/">Chapter 0</a>
+    <img src="https://cdn.kiryuu.io/kuma/solo-leveling/chapter-01/1.jpg"><img data-src="https://cdn.kiryuu.io/kuma/solo-leveling/chapter-01/2.jpg" src="x.gif">
+    <img src="${B}/wp-content/uploads/rekomendasi.png"><img alt="Kiryuu ID" src="https://blogger.googleusercontent.com/img/ad.jpeg"></html>`
+
+  it('search: ajax (nonce dari beranda) + advanced-search digabung, widget disaring', async () => {
+    const m = mockFetch({
+      'action=search': () => ({ text: `<div id="searchResults">${card('solo-leveling', 'Solo Leveling')}${card('solo-necromancer', 'Solo Necromancer')}</div>` }),
+      '/advanced-search/': () => ({ text: `${card('solo-leveling', 'Solo Leveling')}${card('solo-max-level-newbie', 'Solo Max-Level Newbie')}${card('unrelated', 'Widget Populer')}` }),
+      [`${B}/`]: () => ({ text: home })
+    })
+    try {
+      const r = await createKiryuu().search('solo', { page: 1, limit: 10 })
+      assert.deepEqual(r.map(x => x.id), ['kiryuu:solo-leveling', 'kiryuu:solo-necromancer', 'kiryuu:solo-max-level-newbie'])
+      assert.equal(r[0].title, 'Solo Leveling')
+      assert.equal(r[0].cover, `${B}/wp-content/uploads/solo-leveling.png`)
+      assert.ok(m.calls.some(u => u.includes('nonce=26aeda56eb&action=search')))
+      assert.ok(m.calls.some(u => u.includes('search_term=solo')))
+    } finally { m.restore() }
+  })
+
+  it('latest: kartu dengan link chapter diutamakan + chapter terbaru', async () => {
+    const m = mockFetch({ [`${B}/`]: () => ({ text: home }) })
+    try {
+      const r = await createKiryuu().latest({ page: 1, limit: 10 })
+      assert.deepEqual(r.map(x => [x.id, x.latestChapter, x.cover]), [['kiryuu:solo-leveling', '179.6', `${B}/c.png`]])
+    } finally { m.restore() }
+  })
+
+  it('detail: metadata, sinopsis, genre, chapter (angka/tanggal/dedupe), tanpa gravatar', async () => {
+    const m = mockFetch({ '/manga/solo-leveling/': () => ({ text: detailHtml }) })
+    try {
+      const d = await createKiryuu().detail('solo-leveling')
+      assert.equal(d.title, 'Solo Leveling')
+      assert.equal(d.cover, `${B}/wp-content/uploads/cover.png`)
+      assert.equal(d.status, 'ongoing')
+      assert.equal(d.type, 'manhwa')
+      assert.equal(d.author, 'Chugong')
+      assert.equal(d.year, 2018)
+      assert.deepEqual(d.genres, ['Action', 'Fantasy'])
+      assert.match(d.synopsis, /^E-class hunter Jinwoo Sung is the weakest\.\nSecond paragraph\.$/)
+      assert.deepEqual(d.chapters.map(c => [c.id, c.number, c.title]), [['kiryuu:solo-leveling:chapter-179.6.425255', '179.6', ''], ['kiryuu:solo-leveling:chapter-0.147843', '0', '']])
+      assert.ok(d.chapters[0].date && Date.parse(d.chapters[0].date) < Date.now())
+      assert.equal(d.chapters[1].date, '2021-06-01T00:00:00.000Z')
+      assert.equal(d.latestChapter, '179.6')
+      assert.equal(d.chapterCount, 2)
+    } finally { m.restore() }
+  })
+
+  it('chapter: gambar berurutan tanpa iklan/rekomendasi, prev/next dari id chapter', async () => {
+    const m = mockFetch({ '/chapter-1.147943/': () => ({ text: reader }) })
+    try {
+      const c = await createKiryuu().chapter('solo-leveling:chapter-1.147943')
+      assert.deepEqual(c.images, ['https://cdn.kiryuu.io/kuma/solo-leveling/chapter-01/1.jpg', 'https://cdn.kiryuu.io/kuma/solo-leveling/chapter-01/2.jpg'])
+      assert.equal(c.id, 'kiryuu:solo-leveling:chapter-1.147943')
+      assert.equal(c.seriesId, 'kiryuu:solo-leveling')
+      assert.equal(c.number, '1')
+      assert.equal(c.next, 'kiryuu:solo-leveling:chapter-2.200002')
+      assert.equal(c.prev, 'kiryuu:solo-leveling:chapter-0.147843')
+      assert.equal(c.imageHeaders.referer, `${B}/`)
+    } finally { m.restore() }
+  })
+
+  it('halaman tantangan Cloudflare -> error 502 jelas, 404 -> NotFound', async () => {
+    const m = mockFetch({ '/manga/x/': () => ({ text: '<html><title>Just a moment...</title></html>' }), '/manga/y/': () => ({ status: 404 }) })
+    try {
+      await assert.rejects(createKiryuu().detail('x'), /Cloudflare/)
+      await assert.rejects(createKiryuu().detail('y'), (e: any) => e.status === 404)
     } finally { m.restore() }
   })
 })
