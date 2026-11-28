@@ -18,6 +18,10 @@
     {
       "path": "/v1/internal/storage/cron",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/v1/internal/champions/cron",
+      "schedule": "5 17 * * 0"
     }
   ]
 }

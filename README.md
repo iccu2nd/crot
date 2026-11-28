@@ -86,6 +86,7 @@ Pemantauan: pemeriksaan tiap menit, level + ramalan waktu menuju kritis (sampel 
 | `POST /v1/admin/storage/backups`, `GET /v1/admin/storage/backups[/:nama]` | buat, daftar, unduh backup |
 | `GET /v1/admin/storage/export` | backup langsung diunduh (juga untuk serverless) |
 | `GET /v1/internal/storage/cron` | cron Vercel (header `Authorization: Bearer $CRON_SECRET`) |
+| `GET /v1/internal/champions/cron` | cron Vercel mingguan (Senin 00.05 WIB), header sama: membekukan Top 3 minggu lalu + kirim push juara |
 
 Backup: tiap 24 jam ke `BACKUP_DIR` (snapshot konsisten, NDJSON gzip, diverifikasi setelah ditulis, simpan 7 harian + 4 mingguan). Isinya data pengguna dan kurasi admin (users termasuk foto, komentar, vote, XP, streak, riwayat, pustaka, pengumuman, gambar chapter hasil perbaikan); katalog komik tidak dicadangkan karena bisa diambil ulang. Volume Docker ikut server yang sama, jadi unduh salinan ke luar server secara berkala (`/admin/storage/export`). Serverless tidak punya disk tetap: pakai endpoint export dari cron eksternal. Manual: `npm run backup`. Pulihkan ke database kosong atau yang sudah ada (hanya mengisi baris yang hilang, tidak menimpa): `npm run restore -- backups/mitoon-AAAAMMDD-JJMMDD.ndjson.gz`.
 
@@ -95,3 +96,7 @@ Backup: tiap 24 jam ke `BACKUP_DIR` (snapshot konsisten, NDJSON gzip, diverifika
 - **Warmer** (server biasa): mengisi cache/DB berkala, crawl katalog genre, prefetch chapter berikutnya.
 - **Database:** `migrations/*.sql` transaksional dengan advisory lock; pool 10 (Vercel 2), `statement_timeout` 8 dtk. Jangan ubah nama/isi migration yang sudah dijalankan.
 - **Shinigami:** domain situs & API ditulis langsung di `src/providers/shinigami.ts` (`BASE`, `API`).
+
+## Juara mingguan (Top 3)
+
+Tiap Senin 00.00 WIB, tiga teratas papan XP minggu yang baru selesai dibekukan ke tabel `weekly_winners` (migrasi `040`) oleh `WeeklyChampions`: timer 10 menit di server biasa, atau cron `/v1/internal/champions/cron` di serverless. Tiap juara dikirimi push data-only `type=toprank` ke topic pribadi `u_<id>` (app subscribe saat login); push yang gagal dicoba lagi selama 3 hari, yang sudah terkirim tidak diulang. Riwayatnya publik di `GET /v1/users/:id/champions`. Tag `topRank` (1-3) di komentar, chat, dan profil diambil dari papan minggu berjalan.

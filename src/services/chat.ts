@@ -2,6 +2,7 @@ import type { Pool } from 'pg'
 import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
 import { isPremiumSql } from '../core/premium.js'
 import { levelFor } from '../core/xp.js'
+import { withTopRank, type XpService } from './xp.js'
 
 /** Jumlah pesan yang disimpan & dikirim ke app. Yang lebih lama dihapus otomatis tiap ada pesan baru. */
 export const CHAT_KEEP = 50
@@ -27,7 +28,7 @@ export interface ChatItem {
   /** null = pesan biasa */
   replyTo: ChatReplyRef | null
   /** bentuk sama dengan `user` pada komentar, supaya app memakai lencana/level yang sama */
-  user: { id: number; username: string; displayName: string; avatarV: number; level: number; verified: boolean; isOwner: boolean; premium: boolean }
+  user: { id: number; username: string; displayName: string; avatarV: number; level: number; verified: boolean; isOwner: boolean; premium: boolean; topRank?: number }
 }
 
 const SELECT = `SELECT m.id, m.body, m.created_at, m.reply_to, m.reply_user, m.reply_body, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, ${isPremiumSql('u')} AS premium, u.verified_hidden,
@@ -50,7 +51,8 @@ export function cleanChat(raw: unknown): string {
 export class ChatService {
   constructor(
     private readonly pool: Pool,
-    private readonly ownerEmails: string[] = []
+    private readonly ownerEmails: string[] = [],
+    private readonly xp?: XpService
   ) {}
 
   private item(r: any): ChatItem {
@@ -71,7 +73,7 @@ export class ChatService {
   /** `CHAT_KEEP` pesan terakhir, urut lama → baru. */
   async list(): Promise<ChatItem[]> {
     const { rows } = await this.pool.query(`${SELECT} ORDER BY m.id DESC LIMIT $1`, [CHAT_KEEP])
-    return rows.reverse().map(r => this.item(r))
+    return withTopRank(this.xp, rows.reverse().map(r => this.item(r)))
   }
 
   /** Kirim pesan, lalu langsung hapus semua pesan yang lebih lama dari `CHAT_KEEP` terbaru (tabel tak pernah membengkak). */
@@ -96,7 +98,7 @@ export class ChatService {
       .query('DELETE FROM chat_messages WHERE id <= (SELECT id FROM chat_messages ORDER BY id DESC OFFSET $1 LIMIT 1)', [CHAT_KEEP])
       .catch(() => {})
     const full = await this.pool.query(`${SELECT} WHERE m.id = $1`, [rows[0].id])
-    return this.item(full.rows[0])
+    return (await withTopRank(this.xp, [this.item(full.rows[0])]))[0]
   }
 
   /** Hapus pesan sendiri; owner boleh menghapus pesan siapa pun. */

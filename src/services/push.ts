@@ -97,6 +97,24 @@ export class PushService {
     }
   }
 
+  /**
+   * Beri tahu satu juara papan XP mingguan. Pesan data-only ke topic pribadi `u_<id>` (app subscribe saat login);
+   * teks notifikasinya dirangkai di app. Mengembalikan false bila push belum siap / dimatikan (supaya dicoba lagi nanti), melempar bila kirim gagal.
+   */
+  async champion(userId: number, rank: number, weekXp: number): Promise<boolean> {
+    if (!this.configured) return false
+    const st = await this.settings()
+    if (!st.enabled) return false
+    const m = await this.init()
+    if (!m) return false
+    await m.send({
+      topic: `u_${userId}`,
+      data: { type: 'toprank', rank: String(rank), weekXp: String(weekXp) },
+      android: { priority: 'high', ttl: 3 * 24 * 3600 * 1000 }
+    })
+    return true
+  }
+
   /** Kirim notifikasi manual ke semua perangkat. Melempar Error berpesan jelas bila push belum siap / dimatikan. */
   async broadcast(p: { title: string; body: string; seriesId?: string | null }): Promise<void> {
     if (!this.configured) throw new Error('FIREBASE_SERVICE_ACCOUNT belum diisi di server')

@@ -3,13 +3,14 @@ import { USER_CONTENT_CSP } from '../core/security.js'
 import { MAX_AVATAR_BYTES, isJpeg } from '../core/util.js'
 import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
 import type { AuthService } from '../services/auth.js'
+import type { XpService } from '../services/xp.js'
 import { assertBlobAllowed, type StorageGuard } from '../services/storage/policy.js'
 
 const noStore = { 'cache-control': 'no-store' }
 const str = (max: number) => ({ type: 'string', maxLength: max }) as const
 const limit = (max: number) => ({ rateLimit: { max, timeWindow: '1 minute' } })
 
-export const authRoutes: FastifyPluginAsync<{ auth: AuthService; storage?: StorageGuard }> = async (app, { auth, storage }) => {
+export const authRoutes: FastifyPluginAsync<{ auth: AuthService; storage?: StorageGuard; xp?: XpService }> = async (app, { auth, storage, xp }) => {
   const reply200 = (reply: { headers: (h: Record<string, string>) => unknown }) => reply.headers(noStore)
 
   app.get('/auth/config', { schema: { tags: ['auth'], summary: 'Metode login yang aktif (untuk tampilan app)' } }, async (_req, reply) => {
@@ -74,7 +75,10 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService; storage?: Stora
     { schema: { tags: ['auth'], summary: 'Profil publik pengguna', params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } } } }, config: limit(120) },
     async (req, reply) => {
       reply.headers({ 'cache-control': 'public, max-age=30' })
-      return { data: await auth.publicProfile((req.params as { id: number }).id) }
+      const profile = await auth.publicProfile((req.params as { id: number }).id)
+      // Tag juara 1-3 papan mingguan; hanya hiasan, gagal = profil tanpa tag.
+      const topRank = await xp?.topThree().then(m => m.get(profile.id)).catch(() => undefined)
+      return { data: topRank ? { ...profile, topRank } : profile }
     }
   )
 

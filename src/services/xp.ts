@@ -11,9 +11,11 @@ const wibDay = (now = Date.now()) => new Date(now + 7 * 3600_000).toISOString().
 /** Pemberian XP: tiap (user, jenis, ref) hanya sekali + batas harian per jenis; dicatat di xp_events. */
 const BOARD_TTL_MS = 8_000
 const BOARD_CACHE_MAX = 200
+const TOP_TTL_MS = 30_000
 
 export class XpService {
   private readonly boardCache = new Map<string, { until: number; p: Promise<Leaderboard> }>()
+  private top?: { until: number; week: string; p: Promise<Map<number, number>> }
 
   constructor(
     private readonly pool: Pool,
@@ -86,6 +88,33 @@ export class XpService {
     return p
   }
 
+  /**
+   * Tiga teratas papan mingguan: id pengguna -> peringkat (1-3). Dipakai untuk tag juara di komentar, chat, dan profil.
+   * Urutan & aturan sama persis dengan [leaderboard] (akun diblokir tidak ikut). Di-cache 30 detik, ganti minggu = hitung ulang.
+   */
+  topThree(now = Date.now()): Promise<Map<number, number>> {
+    const win = weekWindow(now)
+    const t = Date.now()
+    if (this.top && this.top.week === win.startDay && t < this.top.until) return this.top.p
+    const p = this.pool
+      .query(
+        `WITH w AS (
+           SELECT e.user_id, sum(e.xp)::int AS wxp, max(e.created_at) AS last_at
+             FROM xp_events e WHERE e.day >= $1::date GROUP BY e.user_id
+         )
+         SELECT w.user_id, row_number() OVER (ORDER BY w.wxp DESC, w.last_at ASC, w.user_id ASC)::int AS rank
+           FROM w JOIN users u ON u.id = w.user_id WHERE u.banned_at IS NULL
+          ORDER BY rank LIMIT 3`,
+        [win.startDay]
+      )
+      .then(({ rows }) => new Map<number, number>(rows.map((r: { user_id: unknown; rank: unknown }) => [Number(r.user_id), Number(r.rank)])))
+    this.top = { until: t + TOP_TTL_MS, week: win.startDay, p }
+    p.catch(() => {
+      if (this.top?.p === p) this.top = undefined
+    })
+    return p
+  }
+
   private async computeBoard(meId: number | null, limit: number, now: number, win: ReturnType<typeof weekWindow>): Promise<Leaderboard> {
     const { rows } = await this.pool.query(
       `WITH w AS (
@@ -154,4 +183,19 @@ interface Leaderboard {
   items: RankEntry[]
   /** posisi peminta bila login & sudah punya XP minggu ini */
   me: { rank: number; weekXp: number } | null
+}
+
+/** Pasang `topRank` (1-3) pada pengguna di daftar; yang di luar 3 besar dibiarkan tanpa field. Hanya hiasan: gagal = daftar apa adanya. */
+export async function withTopRank<T extends { user: { id: number; topRank?: number } }>(xp: Pick<XpService, 'topThree'> | undefined, items: T[]): Promise<T[]> {
+  if (!items.length || typeof xp?.topThree !== 'function') return items
+  try {
+    const top = await xp.topThree()
+    for (const it of items) {
+      const r = top.get(it.user.id)
+      if (r) it.user.topRank = r
+    }
+  } catch {
+    /* tag hanya hiasan; jangan gagalkan daftar */
+  }
+  return items
 }

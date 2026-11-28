@@ -23,6 +23,7 @@ import { readingRoutes } from './routes/reading.js'
 import { seriesRoutes } from './routes/series.js'
 import { StorageManager } from './services/storage/manager.js'
 import { storageRoutes } from './routes/storage.js'
+import { championRoutes } from './routes/champions.js'
 import { systemRoutes } from './routes/system.js'
 import { xpRoutes } from './routes/xp.js'
 import { AnnouncementRepo } from './services/announcements.js'
@@ -37,6 +38,7 @@ import { ReadingService } from './services/reading.js'
 import { ScraperService } from './services/scraper.js'
 import { ViewCounter } from './services/views.js'
 import { Warmer } from './services/warmer.js'
+import { WeeklyChampions } from './services/champions.js'
 import { XpService } from './services/xp.js'
 
 /** Composition root: merangkai semua dependensi. */
@@ -147,7 +149,8 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
   const auth = new AuthService(pool, cfg.auth, log)
   const xp = new XpService(pool, cfg.auth.ownerEmails)
   const comments = new CommentService(pool, xp, cfg.auth.ownerEmails)
-  const chat = new ChatService(pool, cfg.auth.ownerEmails)
+  const chat = new ChatService(pool, cfg.auth.ownerEmails, xp)
+  const champions = new WeeklyChampions(pool, log, push)
   const reading = new ReadingService(pool)
   const announcements = new AnnouncementRepo(pool)
   const premium = new PremiumService(pool)
@@ -189,10 +192,11 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
     async v1 => {
       await v1.register(catalogRoutes, { svc })
       await v1.register(seriesRoutes, { svc, auth })
-      await v1.register(authRoutes, { auth, storage })
+      await v1.register(authRoutes, { auth, storage, xp })
       await v1.register(commentRoutes, { auth, comments })
       await v1.register(chatRoutes, { auth, chat })
       await v1.register(xpRoutes, { auth, xp })
+      await v1.register(championRoutes, { champions, cronSecret: cfg.storage.cronSecret })
       await v1.register(premiumRoutes, { auth, premium })
       await v1.register(readingRoutes, { auth, reading })
       await v1.register(libraryRoutes, { auth, library: new LibraryService(pool) })
@@ -209,11 +213,13 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
     if (cfg.serverless) return // tanpa timer latar di serverless
     views.start()
     storage.start()
+    champions.start()
     if (cfg.warmer.enabled) warmer.start()
   })
   app.addHook('onClose', async () => {
     warmer.stop()
     storage.stop()
+    champions.stop()
     await views.stop()
     await pool.end().catch(() => {})
     redis.disconnect()

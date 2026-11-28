@@ -175,7 +175,7 @@ export class StorageManager implements StorageGuard {
   async status(): Promise<StorageStatus> {
     const snap = (await this.monitor.refresh()) ?? this.monitor.current()
     const [tables, blobs, items, forecast, lastMaintenance] = await Promise.all([
-      this.monitor.tables().catch(() => [] as TableUsage[]),
+      this.monitor.tables(60).catch(() => [] as TableUsage[]),
       this.monitor.blobs().catch(() => null),
       this.backups.list().catch(() => [] as BackupInfo[]),
       this.monitor.forecast().catch(() => null),
