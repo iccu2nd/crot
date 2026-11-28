@@ -33,10 +33,6 @@ export interface AuthUser {
   /** tampilan profil Premium (kosong/0 = bawaan; hanya terisi selama Premium aktif) */
   theme: string
   frame: string
-  /** versi background header (0 = tidak ada); dipakai app untuk URL /users/:id/header?v= */
-  headerV: number
-  headerBlur: number
-  headerPos: number
   /** pengguna menyembunyikan centang verified-nya dari tampilan publik (`verified` tetap status asli) */
   verifiedHidden: boolean
   /** pengguna menyembunyikan daftar "Sedang dibaca" dari profil publik */
@@ -66,9 +62,6 @@ interface PublicProfile {
   /** tampilan profil Premium (hanya terisi selama Premium aktif) */
   theme: string
   frame: string
-  headerV: number
-  headerBlur: number
-  headerPos: number
   /** pemilik menyembunyikan daftar "Sedang dibaca" */
   readingHidden: boolean
   /** streak membaca; null bila pemilik menyembunyikan aktivitas bacanya */
@@ -82,24 +75,21 @@ type Log = { warn: (o: object, m?: string) => void; error: (o: object, m?: strin
 
 /** Username hanya boleh diganti sekali per 7 hari. */
 const USERNAME_COOLDOWN_DAYS = 7
-const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, ${isPremiumSql()} AS premium, CASE WHEN premium_until IS NOT NULL AND premium_until > now() THEN (EXTRACT(EPOCH FROM premium_until) * 1000)::bigint ELSE 0 END AS "premiumUntil", theme, frame, CASE WHEN header_bg IS NULL THEN 0 ELSE header_v END AS "headerV", header_blur AS "headerBlur", header_pos AS "headerPos", verified_hidden AS "verifiedHidden", reading_hidden AS "readingHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason", token_version AS "tokenVersion"`
+const COLS = `id, username, email, display_name AS "displayName", bio, xp, verified, ${isPremiumSql()} AS premium, CASE WHEN premium_until IS NOT NULL AND premium_until > now() THEN (EXTRACT(EPOCH FROM premium_until) * 1000)::bigint ELSE 0 END AS "premiumUntil", theme, frame, verified_hidden AS "verifiedHidden", reading_hidden AS "readingHidden", CASE WHEN avatar IS NULL THEN 0 ELSE avatar_v END AS "avatarV", COALESCE(GREATEST(0, CEIL(EXTRACT(EPOCH FROM (username_changed_at + interval '${USERNAME_COOLDOWN_DAYS} days' - now()))))::int, 0) AS "usernameCooldownSec", banned_at AS "bannedAt", ban_reason AS "banReason", muted_until AS "mutedUntil", mute_reason AS "muteReason", token_version AS "tokenVersion"`
 
-type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; premiumUntil?: number | string | null; theme?: string | null; frame?: string | null; headerV?: number; headerBlur?: number; headerPos?: number; verifiedHidden?: boolean; readingHidden?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null; tokenVersion?: number | null }
+type Row = { id: number; username: string; displayName?: string | null; bio?: string | null; xp?: number; verified?: boolean; premium?: boolean; premiumUntil?: number | string | null; theme?: string | null; frame?: string | null; verifiedHidden?: boolean; readingHidden?: boolean; avatarV?: number; usernameCooldownSec?: number | string | null; email?: string | null; bannedAt?: Date | string | null; banReason?: string | null; mutedUntil?: Date | string | null; muteReason?: string | null; tokenVersion?: number | null }
 /** Waktu bisu (epoch ms) bila masih berlaku, selain itu 0. */
 const mutedUntilMs = (v: Date | string | null | undefined, now = Date.now()): number => {
   const t = v ? new Date(v).getTime() : 0
   return t > now ? t : 0
 }
 
-/** Tema, frame & header hanya tampil selama Premium aktif (datanya tetap tersimpan, aktif lagi saat diperpanjang). */
-const profileStyle = (r: { premium?: boolean; theme?: string | null; frame?: string | null; headerV?: number; headerBlur?: number; headerPos?: number }) => {
+/** Tema & frame hanya tampil selama Premium aktif (datanya tetap tersimpan, aktif lagi saat diperpanjang). */
+const profileStyle = (r: { premium?: boolean; theme?: string | null; frame?: string | null }) => {
   const on = r.premium === true
   return {
     theme: on ? r.theme ?? '' : '',
-    frame: on ? r.frame ?? '' : '',
-    headerV: on ? Number(r.headerV ?? 0) : 0,
-    headerBlur: on ? Number(r.headerBlur ?? 0) : 0,
-    headerPos: on ? Number(r.headerPos ?? 50) : 50
+    frame: on ? r.frame ?? '' : ''
   }
 }
 
@@ -277,7 +267,7 @@ export class AuthService {
 
   async publicProfile(userId: number): Promise<PublicProfile> {
     const { rows } = await this.pool.query(
-      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, ${isPremiumSql('u')} AS premium, u.theme, u.frame, CASE WHEN u.header_bg IS NULL THEN 0 ELSE u.header_v END AS "headerV", u.header_blur AS "headerBlur", u.header_pos AS "headerPos", u.verified_hidden, u.reading_hidden, u.created_at AS "createdAt",
+      `SELECT u.id, u.username, u.email, u.display_name AS "displayName", u.bio, u.xp, u.verified, ${isPremiumSql('u')} AS premium, u.theme, u.frame, u.verified_hidden, u.reading_hidden, u.created_at AS "createdAt",
               CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS "avatarV",
               (SELECT count(*)::int FROM comments c WHERE c.user_id = u.id) AS "commentCount",
               COALESCE((SELECT array_agg(to_char(d.day, 'YYYY-MM-DD') ORDER BY d.day DESC) FROM (SELECT day FROM read_days WHERE user_id = u.id ORDER BY day DESC LIMIT 1000) d), '{}') AS "readDays"
@@ -318,8 +308,7 @@ export class AuthService {
 
   // ------------------------------------------------------------------ foto profil
 
-  /** Simpan foto profil. JPEG untuk semua; GIF animasi (`mime` = image/gif) hanya dipanggil route untuk Premium. */
-  async setAvatar(userId: number, img: Buffer, mime: 'image/jpeg' | 'image/gif' = 'image/jpeg'): Promise<AuthUser> {
+  async setAvatar(userId: number, img: Buffer, mime = 'image/jpeg'): Promise<AuthUser> {
     const same = await this.pool.query('SELECT (avatar = $2::bytea AND avatar_mime = $3) AS same FROM users WHERE id = $1', [userId, img, mime])
     if (same.rows[0]?.same === true) {
       const current = await this.pool.query('SELECT ' + COLS + ' FROM users WHERE id = $1', [userId])

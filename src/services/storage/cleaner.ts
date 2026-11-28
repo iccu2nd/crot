@@ -16,14 +16,13 @@ export interface CleanReport {
   steps: StepResult[]
 }
 
-type Table = 'series' | 'chapters' | 'series_views' | 'series_genres' | 'chapter_health' | 'announcements' | 'premium_orders' | 'storage_events' | 'stickers'
+type Table = 'series' | 'chapters' | 'series_views' | 'series_genres' | 'chapter_health' | 'announcements' | 'storage_events' | 'xp_events'
 
 const LOCK_ID = 727275
 const DELETE_BATCH = 500
 const MAX_IDS = 20_000
 const FULL_REWRITE_MIN_BYTES = 8_000_000
 const FULL_REWRITE_MIN_FRACTION = 0.15
-const UNPAID_ORDER_STATUSES = ['pending', 'expired', 'failed', 'cancelled']
 
 const COLD_SERIES_SQL = `
 SELECT s.id FROM series s
@@ -42,16 +41,6 @@ WHERE s.last_seen_at < now() - make_interval(days => $1::int)
   AND NOT EXISTS (SELECT 1 FROM user_library ul WHERE ul.series_id = s.provider || ':' || s.ref)
   AND NOT EXISTS (SELECT 1 FROM reading_progress rp WHERE rp.series_id = s.provider || ':' || s.ref)
 LIMIT $2`
-
-const DUPLICATE_STICKERS_SQL = `
-DELETE FROM stickers s
-USING stickers k
-WHERE s.content_hash IS NOT NULL
-  AND s.content_hash = k.content_hash
-  AND s.owner_id IS NOT DISTINCT FROM k.owner_id
-  AND s.id > k.id
-  AND NOT EXISTS (SELECT 1 FROM chat_messages m WHERE m.body = '[[stk:' || s.id || ']]')
-  AND NOT EXISTS (SELECT 1 FROM comments c WHERE c.body = '[[stk:' || s.id || ']]')`
 
 const chunk = <T>(items: T[], size: number): T[][] => {
   const out: T[][] = []
@@ -86,13 +75,10 @@ export class StorageCleaner {
           "DELETE FROM announcements WHERE (expires_at IS NOT NULL AND expires_at < now() - interval '60 days') OR (active = false AND created_at < now() - interval '60 days')"
         )
       )
-      await this.attempt(steps, 'premium_orders_unpaid', () =>
-        this.simpleDelete(client, 'premium_orders', "DELETE FROM premium_orders WHERE status = ANY($1::text[]) AND created_at < now() - interval '30 days'", [UNPAID_ORDER_STATUSES])
-      )
       await this.attempt(steps, 'storage_events', () =>
         this.simpleDelete(client, 'storage_events', "DELETE FROM storage_events WHERE (kind = 'sample' AND created_at < now() - interval '14 days') OR created_at < now() - interval '180 days'")
       )
-      await this.attempt(steps, 'duplicate_stickers', () => this.simpleDelete(client, 'stickers', DUPLICATE_STICKERS_SQL))
+      await this.attempt(steps, 'xp_events', () => this.simpleDelete(client, 'xp_events', 'DELETE FROM xp_events WHERE day < CURRENT_DATE - $1::int', [policy.xpLedgerDays]))
       await this.attempt(steps, 'cold_chapters', () => this.coldChapters(client, policy))
       await this.attempt(steps, 'stale_series', () => this.staleSeries(client, policy))
     } finally {

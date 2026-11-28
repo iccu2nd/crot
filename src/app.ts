@@ -21,8 +21,6 @@ import { notificationRoutes } from './routes/notifications.js'
 import { premiumRoutes } from './routes/premium.js'
 import { readingRoutes } from './routes/reading.js'
 import { seriesRoutes } from './routes/series.js'
-import { stickerRoutes } from './routes/stickers.js'
-import { StickerService } from './services/stickers.js'
 import { StorageManager } from './services/storage/manager.js'
 import { storageRoutes } from './routes/storage.js'
 import { systemRoutes } from './routes/system.js'
@@ -194,9 +192,8 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
       await v1.register(authRoutes, { auth, storage })
       await v1.register(commentRoutes, { auth, comments })
       await v1.register(chatRoutes, { auth, chat })
-      await v1.register(stickerRoutes, { auth, stickers: new StickerService(pool, storage) })
       await v1.register(xpRoutes, { auth, xp })
-      await v1.register(premiumRoutes, { auth, premium, storage })
+      await v1.register(premiumRoutes, { auth, premium })
       await v1.register(readingRoutes, { auth, reading })
       await v1.register(libraryRoutes, { auth, library: new LibraryService(pool) })
       await v1.register(announcementRoutes, { repo: announcements })

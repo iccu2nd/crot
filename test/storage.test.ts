@@ -88,6 +88,7 @@ describe('storage policy', () => {
       assert.ok(list[i].enrichScale <= list[i - 1].enrichScale)
       assert.ok(list[i].coldChapterDays <= list[i - 1].coldChapterDays)
       assert.ok(list[i].viewRetentionDays <= list[i - 1].viewRetentionDays)
+      assert.ok(list[i].xpLedgerDays <= list[i - 1].xpLedgerDays)
     }
     assert.equal(policyFor('ok').crawl, 'full')
     assert.equal(policyFor('warning').crawl, 'light')
@@ -202,7 +203,7 @@ describe('BackupService', () => {
 })
 
 describe('StorageCleaner', () => {
-  const protectedTables = ['users', 'user_library', 'reading_progress', 'xp_events', 'read_days', 'comments', 'comment_votes', 'chat_messages', 'chapter_images']
+  const protectedTables = ['users', 'user_library', 'reading_progress', 'read_days', 'comments', 'comment_votes', 'chat_messages', 'chapter_images']
   const mutation = new RegExp(`\\b(DELETE\\s+FROM|TRUNCATE(\\s+TABLE)?|UPDATE|INSERT\\s+INTO|VACUUM[^;]*?)\\s+(${protectedTables.join('|')})\\b`, 'i')
 
   it('tidak pernah mengubah data penting pengguna di level mana pun', async () => {
@@ -220,6 +221,19 @@ describe('StorageCleaner', () => {
       assert.ok(client.sql.some(s => /DELETE FROM chapters/.test(s)))
       assert.equal(client.released, 1)
     }
+  })
+
+  it('memangkas buku besar XP lama tanpa menyentuh total XP pengguna', async () => {
+    const client = new FakeClient()
+    const params: unknown[][] = []
+    const spy = client.query.bind(client)
+    client.query = async (sql: string, p: unknown[] = []) => {
+      if (/DELETE FROM xp_events/.test(sql)) params.push(p)
+      return spy(sql, p)
+    }
+    await new StorageCleaner(poolOf(client), 200_000_000).run(policyFor('warning'))
+    assert.deepEqual(params, [[45]])
+    assert.ok(client.sql.every(s => !/UPDATE users/.test(s)))
   })
 
   it('melewati seri usang pada level aman dan menghapusnya saat tertekan', async () => {

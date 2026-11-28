@@ -1,7 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { USER_CONTENT_CSP } from '../core/security.js'
 import { MAX_AVATAR_BYTES, isJpeg } from '../core/util.js'
-import { MAX_GIF_AVATAR_BYTES, isGif } from '../core/premium.js'
 import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
 import type { AuthService } from '../services/auth.js'
 import { assertBlobAllowed, type StorageGuard } from '../services/storage/policy.js'
@@ -30,19 +29,9 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService; storage?: Stora
   // ---- foto profil: JPEG mentah (app sudah memotong persegi & mengecilkan ke ±384px) ----
   app.addContentTypeParser('image/jpeg', { parseAs: 'buffer', bodyLimit: MAX_AVATAR_BYTES }, (_req, body, done) => done(null, body))
 
-  // GIF animasi: khusus Premium, maks. 2 MB.
-  app.addContentTypeParser('image/gif', { parseAs: 'buffer', bodyLimit: MAX_GIF_AVATAR_BYTES }, (_req, body, done) => done(null, body))
-
-  app.put('/auth/me/avatar', { schema: { tags: ['auth'], summary: 'Ganti foto profil (body = image/jpeg maks. 300 KB, atau image/gif maks. 2 MB khusus Premium)' }, config: limit(10) }, async (req, reply) => {
+  app.put('/auth/me/avatar', { schema: { tags: ['auth'], summary: 'Ganti foto profil (body = image/jpeg maks. 300 KB)' }, config: limit(10) }, async (req, reply) => {
     const user = await auth.me(req.headers.authorization)
     const body = req.body
-    if (isGif(body)) {
-      if (!user.premium) throw new AppError(403, 'PREMIUM_REQUIRED', 'Foto profil GIF khusus Premium')
-      if (body.length > MAX_GIF_AVATAR_BYTES) throw new ValidationError('GIF terlalu besar (maks. 2 MB)')
-      await assertBlobAllowed(storage, body.length, MAX_GIF_AVATAR_BYTES)
-      reply200(reply)
-      return { data: await auth.setAvatar(user.id, body, 'image/gif') }
-    }
     if (!isJpeg(body)) throw new ValidationError('Foto harus berformat JPEG')
     if (body.length > MAX_AVATAR_BYTES) throw new ValidationError('Foto terlalu besar (maks. 300 KB)')
     await assertBlobAllowed(storage, body.length, MAX_AVATAR_BYTES)

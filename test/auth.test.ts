@@ -173,7 +173,7 @@ test('profil publik: tanpa email/hash, memuat level & jumlah komentar; tak ada =
   const svc = make(f.pool)
   const a = await svc.google('budi@mail.com')
   const pub = await svc.publicProfile(a.user.id)
-  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'bio', 'commentCount', 'displayName', 'frame', 'headerBlur', 'headerPos', 'headerV', 'id', 'isOwner', 'joinedAt', 'level', 'premium', 'readingHidden', 'streak', 'theme', 'username', 'verified', 'xp'])
+  assert.deepEqual(Object.keys(pub).sort(), ['avatarV', 'bio', 'commentCount', 'displayName', 'frame', 'id', 'isOwner', 'joinedAt', 'level', 'premium', 'readingHidden', 'streak', 'theme', 'username', 'verified', 'xp'])
   assert.equal(pub.username, 'budi')
   assert.equal(pub.level, 1)
   assert.equal(pub.commentCount, 3)

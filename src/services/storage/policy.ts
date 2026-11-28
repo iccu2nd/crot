@@ -39,17 +39,18 @@ export interface StoragePolicy {
   chapterWrites: 'all' | 'existing' | 'none'
   blobScale: number
   viewRetentionDays: number
+  xpLedgerDays: number
   coldChapterDays: number
   protectRecentDetailDays: number
   staleSeriesDays: number | null
 }
 
 const POLICIES: Record<StorageLevel, Omit<StoragePolicy, 'level'>> = {
-  ok: { crawl: 'full', enrichScale: 1, catalogWrites: true, chapterWrites: 'all', blobScale: 1, viewRetentionDays: 90, coldChapterDays: 90, protectRecentDetailDays: 3, staleSeriesDays: null },
-  notice: { crawl: 'full', enrichScale: 1, catalogWrites: true, chapterWrites: 'all', blobScale: 1, viewRetentionDays: 90, coldChapterDays: 60, protectRecentDetailDays: 3, staleSeriesDays: null },
-  warning: { crawl: 'light', enrichScale: 0.5, catalogWrites: true, chapterWrites: 'all', blobScale: 0.5, viewRetentionDays: 60, coldChapterDays: 30, protectRecentDetailDays: 3, staleSeriesDays: 120 },
-  high: { crawl: 'off', enrichScale: 0, catalogWrites: true, chapterWrites: 'existing', blobScale: 0.25, viewRetentionDays: 45, coldChapterDays: 14, protectRecentDetailDays: 1, staleSeriesDays: 60 },
-  critical: { crawl: 'off', enrichScale: 0, catalogWrites: false, chapterWrites: 'none', blobScale: 0, viewRetentionDays: 30, coldChapterDays: 3, protectRecentDetailDays: 0, staleSeriesDays: 30 }
+  ok: { crawl: 'full', enrichScale: 1, catalogWrites: true, chapterWrites: 'all', blobScale: 1, viewRetentionDays: 90, xpLedgerDays: 60, coldChapterDays: 90, protectRecentDetailDays: 3, staleSeriesDays: null },
+  notice: { crawl: 'full', enrichScale: 1, catalogWrites: true, chapterWrites: 'all', blobScale: 1, viewRetentionDays: 90, xpLedgerDays: 60, coldChapterDays: 60, protectRecentDetailDays: 3, staleSeriesDays: null },
+  warning: { crawl: 'light', enrichScale: 0.5, catalogWrites: true, chapterWrites: 'all', blobScale: 0.5, viewRetentionDays: 60, xpLedgerDays: 45, coldChapterDays: 30, protectRecentDetailDays: 3, staleSeriesDays: 120 },
+  high: { crawl: 'off', enrichScale: 0, catalogWrites: true, chapterWrites: 'existing', blobScale: 0.25, viewRetentionDays: 45, xpLedgerDays: 30, coldChapterDays: 14, protectRecentDetailDays: 1, staleSeriesDays: 60 },
+  critical: { crawl: 'off', enrichScale: 0, catalogWrites: false, chapterWrites: 'none', blobScale: 0, viewRetentionDays: 30, xpLedgerDays: 14, coldChapterDays: 3, protectRecentDetailDays: 0, staleSeriesDays: 30 }
 }
 
 export const policyFor = (level: StorageLevel): StoragePolicy => ({ level, ...POLICIES[level] })
@@ -66,7 +67,7 @@ export async function assertBlobAllowed(guard: StorageGuard | undefined, bytes: 
   if (policy.blobScale >= 1) return
   const allowed = Math.floor(normalMax * policy.blobScale)
   if (allowed <= 0) {
-    throw new AppError(507, 'STORAGE_FULL', 'Penyimpanan server hampir penuh, unggah foto dan stiker dinonaktifkan sementara. Coba lagi nanti.')
+    throw new AppError(507, 'STORAGE_FULL', 'Penyimpanan server hampir penuh, unggah foto profil dinonaktifkan sementara. Coba lagi nanti.')
   }
   if (bytes > allowed) {
     throw new AppError(507, 'STORAGE_LOW', `Penyimpanan server menipis, ukuran maksimal sementara ${Math.floor(allowed / 1024)} KB`)

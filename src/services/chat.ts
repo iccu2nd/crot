@@ -2,7 +2,6 @@ import type { Pool } from 'pg'
 import { AppError, NotFoundError, ValidationError } from '../core/errors.js'
 import { isPremiumSql } from '../core/premium.js'
 import { levelFor } from '../core/xp.js'
-import { assertStickerUsable, stickerText } from './stickers.js'
 
 /** Jumlah pesan yang disimpan & dikirim ke app. Yang lebih lama dihapus otomatis tiap ada pesan baru. */
 export const CHAT_KEEP = 50
@@ -78,7 +77,6 @@ export class ChatService {
   /** Kirim pesan, lalu langsung hapus semua pesan yang lebih lama dari `CHAT_KEEP` terbaru (tabel tak pernah membengkak). */
   async add(userId: number, body: unknown, replyToId?: number | null): Promise<ChatItem> {
     const text = cleanChat(body)
-    await assertStickerUsable(this.pool, userId, text)
     const recent = await this.pool.query("SELECT count(*)::int AS n FROM chat_messages WHERE user_id = $1 AND created_at > now() - interval '10 seconds'", [userId])
     if (Number(recent.rows[0]?.n ?? 0) >= BURST) throw new AppError(429, 'RATE_LIMITED', 'Terlalu cepat, tunggu sebentar sebelum mengirim lagi')
     // Kutipan diambil dari pesan asli saat ini; bila pesan itu sudah dihapus/dipangkas, balasan ditolak.
@@ -87,7 +85,7 @@ export class ChatService {
       const q = await this.pool.query(`${SELECT} WHERE m.id = $1`, [replyToId])
       if (!q.rows[0]) throw new NotFoundError('Pesan yang dibalas sudah tidak ada')
       const it = this.item(q.rows[0])
-      reply = { id: it.id, userName: it.user.displayName || it.user.username, body: stickerText(it.body).replace(/\s+/g, ' ').slice(0, QUOTE_LEN) }
+      reply = { id: it.id, userName: it.user.displayName || it.user.username, body: it.body.replace(/\s+/g, ' ').slice(0, QUOTE_LEN) }
     }
     const { rows } = await this.pool.query(
       'INSERT INTO chat_messages (user_id, body, reply_to, reply_user, reply_body) VALUES ($1, $2, $3, $4, $5) RETURNING id',

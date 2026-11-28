@@ -42,8 +42,6 @@ export interface TableUsage {
 
 export interface BlobUsage {
   avatars: { count: number; bytes: number }
-  headers: { count: number; bytes: number }
-  stickers: { count: number; bytes: number }
 }
 
 export interface StorageEvent {
@@ -73,11 +71,7 @@ LIMIT $1`
 const BLOBS_SQL = `
 SELECT
   (SELECT count(avatar) FROM users)::int AS avatars,
-  (SELECT COALESCE(sum(pg_column_size(avatar)), 0) FROM users)::bigint AS avatar_bytes,
-  (SELECT count(header_bg) FROM users)::int AS headers,
-  (SELECT COALESCE(sum(pg_column_size(header_bg)), 0) FROM users)::bigint AS header_bytes,
-  (SELECT count(*) FROM stickers)::int AS stickers,
-  (SELECT COALESCE(sum(pg_column_size(image)), 0) FROM stickers)::bigint AS sticker_bytes`
+  (SELECT COALESCE(sum(pg_column_size(avatar)), 0) FROM users)::bigint AS avatar_bytes`
 
 const percent = (snap: StorageSnapshot) => `${(snap.ratio * 100).toFixed(1)}%`
 const describe = (snap: StorageSnapshot) => `${formatBytes(snap.usedBytes)} dari ${formatBytes(snap.limitBytes)} (${percent(snap)})`
@@ -233,9 +227,7 @@ export class StorageMonitor implements StorageGuard {
     const { rows } = await this.pool.query(BLOBS_SQL)
     const r = rows[0] ?? {}
     return {
-      avatars: { count: Number(r.avatars ?? 0), bytes: Number(r.avatar_bytes ?? 0) },
-      headers: { count: Number(r.headers ?? 0), bytes: Number(r.header_bytes ?? 0) },
-      stickers: { count: Number(r.stickers ?? 0), bytes: Number(r.sticker_bytes ?? 0) }
+      avatars: { count: Number(r.avatars ?? 0), bytes: Number(r.avatar_bytes ?? 0) }
     }
   }
 

@@ -41,6 +41,7 @@ interface TableSpec {
   page: number
   serial?: string
   identity?: boolean
+  optional?: boolean
 }
 
 export const BACKUP_TABLES: TableSpec[] = [
@@ -51,10 +52,9 @@ export const BACKUP_TABLES: TableSpec[] = [
   { name: 'read_days', key: [{ col: 'user_id', type: 'integer' }, { col: 'day', type: 'date' }], page: 2000 },
   { name: 'reading_progress', key: [{ col: 'user_id', type: 'integer' }, { col: 'series_id', type: 'text' }], page: 500 },
   { name: 'user_library', key: [{ col: 'user_id', type: 'integer' }, { col: 'series_id', type: 'text' }], page: 200 },
-  { name: 'stickers', key: [{ col: 'id', type: 'integer' }], page: 20, serial: 'id' },
   { name: 'announcements', key: [{ col: 'id', type: 'integer' }], page: 500, serial: 'id', identity: true },
   { name: 'push_settings', key: [{ col: 'id', type: 'smallint' }], page: 10 },
-  { name: 'premium_orders', key: [{ col: 'id', type: 'text' }], page: 500 },
+  { name: 'premium_orders', key: [{ col: 'id', type: 'text' }], page: 500, optional: true },
   { name: 'chapter_images', key: [{ col: 'provider', type: 'text' }, { col: 'ref', type: 'text' }], page: 200 }
 ]
 
@@ -141,6 +141,7 @@ export class BackupService {
     yield `${JSON.stringify({ _: FORMAT, v: 1, createdAt: new Date().toISOString(), schema: schema.rows[0]?.name ?? null, tables: BACKUP_TABLES.map(t => t.name) })}\n`
     for (const table of BACKUP_TABLES) {
       counts[table.name] = 0
+      if (table.optional && !(await this.exists(client, table.name))) continue
       let cursor: string[] | null = null
       for (;;) {
         const res: { rows: Array<Record<string, string>> } = cursor
@@ -156,6 +157,11 @@ export class BackupService {
       }
     }
     yield `${JSON.stringify({ _: 'end', counts })}\n`
+  }
+
+  private async exists(client: PoolClient, name: string): Promise<boolean> {
+    const res = await client.query<{ ok: boolean }>('SELECT to_regclass($1) IS NOT NULL AS ok', [`public.${name}`])
+    return res.rows[0]?.ok === true
   }
 
   private async openSnapshot(): Promise<PoolClient> {
@@ -271,6 +277,7 @@ export class BackupService {
       if (!rows?.length) return
       buffers.set(name, [])
       const spec = specs.get(name) as TableSpec
+      if (spec.optional && !(await this.exists(client, name))) return
       const override = spec.identity ? 'OVERRIDING SYSTEM VALUE ' : ''
       const res = await client.query(
         `INSERT INTO ${name} ${override}SELECT * FROM jsonb_populate_recordset(NULL::${name}, $1::jsonb) ON CONFLICT DO NOTHING`,
