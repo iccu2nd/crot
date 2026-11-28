@@ -2,7 +2,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { createKiryuu } from '../src/providers/kiryuu.js'
-import { createKomiku } from '../src/providers/komiku.js'
 import { createLumos } from '../src/providers/lumos.js'
 import { createShinigami } from '../src/providers/shinigami.js'
 import { mockFetch } from './helpers.js'
@@ -422,102 +421,5 @@ describe('kiryuu (scraping HTML)', () => {
       assert.deepEqual((await a.chapter('kanojo-no-tomodachi:chapter-141.1')).images, [1, 2, 3].map(n => `${dir}/${n}.jpg`))
       assert.equal(probed.length, before, 'alt Page N cukup, tanpa probing')
     } finally { globalThis.fetch = original }
-  })
-})
-
-describe('komiku (scraping HTML)', () => {
-  const S = 'https://komiku.org'
-  const bge = (slug: string, title: string, extra = '') => `<div class="bge"><div class="bgei"><a href="${S}/manga/${slug}/"><div class="ims"><img class="lazy" src="${S}/asset/img/lazy.jpg?resize=120,75" data-src="https://thumbnail.komiku.org/uploads/${slug}.jpg?resize=450,235" alt="Komik ${title}"><div class="tpe1_inf"><b>Manhwa</b> Action</div></div></a></div><div class="kan"><a href="${S}/manga/${slug}/"><h3>${title}</h3></a>${extra}</div></div>`
-  const results = bge('lookism', 'Lookism', `<div class="new1"><a href="${S}/lookism-chapter-540/"><span>Terbaru:</span> Chapter 540</a></div>`) + bge('lookism-s2', 'Lookism Season 2') +
-    `<aside>${bge('devious-son-of-heaven', 'Devious Son Of Heaven')}</aside>`
-  const detailHtml = `<html><head><meta property="og:image" content="https://thumbnail.komiku.org/uploads/lookism-full.jpg"></head><body>
-    <h1><span>Komik </span>Lookism</h1>
-    <section id="Informasi"><table class="inftable"><tr><td>Judul Komik</td><td>Lookism</td></tr><tr><td>Jenis Komik</td><td><a href="${S}/manhwa/">Manhwa</a></td></tr><tr><td>Pengarang</td><td>Park Tae-joon</td></tr><tr><td>Status</td><td>Berjalan</td></tr></table></section>
-    <ul class="genre"><li><a href="${S}/genre/action/"><span itemprop="genre">Action</span></a></li><li><a href="${S}/genre/drama/">Drama</a></li></ul>
-    <section id="Sinopsis"><h2>Sinopsis Komik Lookism</h2><p>Daniel Park adalah siswa yang diganggu karena penampilannya.</p><p>Suatu hari ia mendapat tubuh kedua.</p></section>
-    <table id="Daftar_Chapter"><tr><td class="judulseries"><a href="${S}/lookism-chapter-540/"><span>Chapter 540</span></a></td><td class="tanggalseries">27/11/2026</td></tr>
-    <tr><td class="judulseries"><a href="${S}/lookism-chapter-1-5/"><span>Chapter 1.5</span></a></td><td class="tanggalseries">2 hari lalu</td></tr>
-    <tr><td class="judulseries"><a href="${S}/lookism-chapter-1/"><span>Chapter 1</span></a></td><td class="tanggalseries">01/01/2020</td></tr></table>
-    <a href="${S}/other-chapter-9/">Chapter 9</a></body></html>`
-  const reader = `<html><link rel="next" href="${S}/lookism-chapter-2/"><body><a href="${S}/lookism-chapter-540/" class="prev">Sebelumnya</a>
-    <div id="Baca_Komik"><img src="${S}/asset/img/lazy.jpg" data-src="https://img.komiku.org/upload5/lookism/1/1.jpg"><img src="https://img.komiku.org/upload5/lookism/1/2.jpg"><img src="https://img.komiku.org/promosi/banner.jpg"></div></body></html>`
-
-  it('search: cover dari data-src (bukan placeholder lazy.jpg), hanya yang cocok kata kunci, sumber digabung', async () => {
-    const m = mockFetch({
-      'api.komiku.org/?post_type=manga&s=lookism': () => ({ text: results }),
-      '/wp-json/': () => ({ status: 404 }),
-      [`${S}/`]: () => ({ text: results })
-    })
-    try {
-      const r = await createKomiku().search('lookism', { page: 1, limit: 10 })
-      assert.deepEqual(r.map(x => x.id), ['komiku:lookism', 'komiku:lookism-s2'])
-      assert.equal(r[0].title, 'Lookism')
-      assert.equal(r[0].cover, 'https://thumbnail.komiku.org/uploads/lookism.jpg?resize=450,235')
-      assert.equal(r[0].type, 'manhwa')
-      assert.equal(r[0].latestChapter, '540')
-      assert.ok(r.every(x => !x.cover.includes('lazy')))
-    } finally { m.restore() }
-  })
-
-  it('search: semua sumber gagal -> error; halaman di luar hasil (404) -> kosong', async () => {
-    const down = mockFetch({ komiku: () => ({ status: 500 }) })
-    try { await assert.rejects(createKomiku().search('x', { page: 1, limit: 5 })) } finally { down.restore() }
-    const none = mockFetch({ komiku: () => ({ status: 404 }) })
-    try { assert.deepEqual(await createKomiku().search('x', { page: 9, limit: 5 }), []) } finally { none.restore() }
-  })
-
-  it('latest/catalog: dari api.komiku.org, kartu + chapter terbaru', async () => {
-    const m = mockFetch({ 'api.komiku.org/manga/page/2/?orderby=modified': () => ({ text: bge('a', 'A', `<a href="${S}/a-chapter-7/">x</a>`) }) })
-    try {
-      const a = createKomiku()
-      assert.deepEqual((await a.latest({ page: 2, limit: 10 })).map(x => [x.id, x.latestChapter]), [['komiku:a', '7']])
-      assert.deepEqual((await a.catalog!({ page: 2, size: 50 })).map(x => x.id), ['komiku:a'])
-    } finally { m.restore() }
-  })
-
-  it('detail: info, genre, sinopsis, chapter (slug berbeda dari slug manga, desimal, tanggal)', async () => {
-    const m = mockFetch({ '/manga/lookism/': () => ({ text: detailHtml }) })
-    try {
-      const d = await createKomiku().detail('lookism')
-      assert.equal(d.title, 'Lookism')
-      assert.equal(d.cover, 'https://thumbnail.komiku.org/uploads/lookism-full.jpg')
-      assert.deepEqual([d.type, d.status, d.author], ['manhwa', 'ongoing', 'Park Tae-joon'])
-      assert.deepEqual(d.genres, ['Action', 'Drama'])
-      assert.match(d.synopsis, /^Daniel Park .*\n\nSuatu hari/)
-      assert.deepEqual(d.chapters.map(c => [c.id, c.number]), [['komiku:lookism:lookism-chapter-540', '540'], ['komiku:lookism:lookism-chapter-1-5', '1.5'], ['komiku:lookism:lookism-chapter-1', '1']])
-      assert.equal(d.chapters[0].date, '2026-11-27T00:00:00.000Z')
-      assert.ok(d.chapters[1].date && Date.parse(d.chapters[1].date) < Date.now())
-      assert.equal(d.latestChapter, '540')
-      assert.equal(d.chapterCount, 3) // chapter seri lain di luar #Daftar_Chapter tidak ikut
-    } finally { m.restore() }
-  })
-
-  it('chapter: gambar dari data-src tanpa placeholder/iklan, prev/next', async () => {
-    const m = mockFetch({ '/lookism-chapter-1/': () => ({ text: reader }) })
-    try {
-      const c = await createKomiku().chapter('lookism:lookism-chapter-1')
-      assert.deepEqual(c.images, ['https://img.komiku.org/upload5/lookism/1/1.jpg', 'https://img.komiku.org/upload5/lookism/1/2.jpg'])
-      assert.equal(c.id, 'komiku:lookism:lookism-chapter-1')
-      assert.equal(c.seriesId, 'komiku:lookism')
-      assert.equal(c.number, '1')
-      assert.equal(c.next, 'komiku:lookism:lookism-chapter-2')
-      assert.equal(c.prev, 'komiku:lookism:lookism-chapter-540')
-      assert.equal(c.imageHeaders.referer, `${S}/`)
-    } finally { m.restore() }
-  })
-
-  it('403 -> pesan error memuat cuplikan body (diagnosa), status upstream 403', async () => {
-    const m = mockFetch({ '/manga/z/': () => ({ status: 403, text: '<html><title>Attention Required! | Cloudflare</title><body>Sorry, you have been blocked</body></html>' }) })
-    try {
-      await assert.rejects(createKomiku().detail('z'), (e: any) => e.upstreamStatus === 403 && /HTTP 403/.test(e.message) && /Sorry, you have been blocked/.test(e.message))
-    } finally { m.restore() }
-  })
-
-  it('404 -> NotFound; halaman tantangan Cloudflare -> error jelas', async () => {
-    const m = mockFetch({ '/manga/x/': () => ({ status: 404 }), '/manga/y/': () => ({ text: '<html><title>Just a moment...</title></html>' }) })
-    try {
-      await assert.rejects(createKomiku().detail('x'), (e: any) => e.status === 404)
-      await assert.rejects(createKomiku().detail('y'), /Cloudflare/)
-    } finally { m.restore() }
   })
 })

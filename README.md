@@ -1,6 +1,6 @@
 # MiToon Backend
 
-REST API (Node 22 + TypeScript + Fastify) untuk aplikasi MiToon: agregator komik dari **Shinigami**, **Lumos**, **Kiryuu**, dan **Komiku** dengan format data seragam, fallback otomatis antar provider, cache Redis (stale-while-revalidate), dan PostgreSQL sebagai data utama. Dokumentasi interaktif di `/docs`.
+REST API (Node 22 + TypeScript + Fastify) untuk aplikasi MiToon: agregator komik dari **Shinigami**, **Lumos**, dan **Kiryuu** dengan format data seragam, fallback otomatis antar provider, cache Redis (stale-while-revalidate), dan PostgreSQL sebagai data utama. Dokumentasi interaktif di `/docs`.
 
 ## Jalankan
 
@@ -44,7 +44,7 @@ Migration berjalan otomatis saat start (`npm run migrate` untuk manual). Env waj
 | `GET /announcements` | pengumuman aktif (maks. 5) |
 | `GET /providers`, `GET /health` | status provider/breaker, cek PostgreSQL & Redis |
 
-Id unified: `<provider>:<id asli>` (`shinigami:<uuid>`, `lumos:<slug>`; `kiryuu:<slug>`; `komiku:<slug>`; chapter Lumos/Kiryuu/Komiku `<provider>:<slug>:<chapter-slug>`). Sukses `{ data, meta }`, error `{ error: { code, message } }`.
+Id unified: `<provider>:<id asli>` (`shinigami:<uuid>`, `lumos:<slug>`; `kiryuu:<slug>`; chapter Lumos/Kiryuu `<provider>:<slug>:<chapter-slug>`). Sukses `{ data, meta }`, error `{ error: { code, message } }`.
 
 ### Akun, profil, komunitas
 - **Login:** hanya Google (`POST /auth/google`, `GET /auth/me`, `GET /auth/config`); tanpa login = pengunjung (data hanya di perangkat). JWT HS256 90 hari. Isi `GOOGLE_CLIENT_ID` (client type *Web*; buat juga client *Android* untuk `id.mitoon.app` + SHA-1 keystore rilis yang tetap).
@@ -96,7 +96,6 @@ Backup: tiap 24 jam ke `BACKUP_DIR` (snapshot konsisten, NDJSON gzip, diverifika
 - **Warmer** (server biasa): mengisi cache/DB berkala, crawl katalog genre, prefetch chapter berikutnya.
 - **Database:** `migrations/*.sql` transaksional dengan advisory lock; pool 10 (Vercel 2), `statement_timeout` 8 dtk. Jangan ubah nama/isi migration yang sudah dijalankan.
 - **Shinigami:** domain situs & API ditulis langsung di `src/providers/shinigami.ts` (`BASE`, `API`).
-- **Komiku:** scraping HTML tanpa dependensi tambahan (regex, tanpa cheerio), prioritas terendah. Domain lewat env `KOMIKU_BASE` (default `https://komiku.org`) dan `KOMIKU_API` (default `https://api.komiku.org`, tempat situs memuat listing/pencarian); cadangan otomatis ke `komiku.id` dan, bila DNS bermasalah, resolve lewat DoH lalu sambung ke IP. Bila Cloudflare menantang (403/503), `src/core/cfsolver.ts` otomatis membuka Chrome (puppeteer-real-browser + Xvfb), mengambil `cf_clearance`, lalu fetch diulang dengan cookie + UA itu; jika cookie masih ditolak, halaman diambil lewat Chrome yang sama. Env solver: `CF_SOLVER=0` (matikan), `CHROME_PATH` (default `/usr/bin/chromium` di Docker), `CF_SOLVER_TTL_MIN` (25), `CF_SOLVER_TIMEOUT_SEC` (45), `CF_SOLVER_IDLE_SEC` (90, Chrome ditutup saat idle), `CF_SOLVER_COOLDOWN_SEC` (120, jeda setelah gagal). Blokir IP keras (error 1020) tidak bisa diatasi solver; pesan error akan menyebutnya. `KOMIKU_COOKIE` + `KOMIKU_UA` tetap bisa diisi manual. Cover diambil dari `data-src` (atribut `src` hanya placeholder `lazy.jpg`); hasil pencarian disaring agar sesuai kata kunci (halaman memuat widget lain). Chapter id: `komiku:<slug>:<slug-chapter>` (slug chapter bisa berbeda dari slug manga). Chapter yang tidak terdaftar di situs tidak dikarang.
 - **Kiryuu:** scraping HTML (tanpa browser headless), prioritas terendah. Domain lewat env `KIRYUU_BASE` (default `https://v7.kiryuu.to`). Bila Cloudflare menampilkan tantangan, isi `KIRYUU_COOKIE` (`cf_clearance=...`) dan `KIRYUU_UA` (User-Agent browser yang sama). Pencarian menggabungkan (1) modal `admin-ajax.php?action=search` (nonce dari beranda; hasil paling relevan), (2) katalog Advanced Search `admin-ajax.php?action=advanced_search` (POST FormData; nonce `search_nonce` dari `action=get_nonce`; 1 halaman API = 2 halaman upstream, jadi hasil banyak) dan (3) pencarian WordPress `/?s=` sebagai cadangan; duplikat dibuang. Katalog yang sama dipakai untuk `latest` halaman > 1 serta `browse` (filter genre/tipe/status + sortir) dan `listGenres` (dibaca dari `searchTerms` situs).
 
 ## Juara mingguan (Top 3)
