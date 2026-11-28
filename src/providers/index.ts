@@ -1,12 +1,14 @@
 import type { ProviderAdapter, ProviderKey } from '../core/types.js'
 import { createLumos } from './lumos.js'
 import { createKiryuu } from './kiryuu.js'
+import { createKomiku } from './komiku.js'
 import { createShinigami } from './shinigami.js'
 
 const factories: Record<ProviderKey, () => ProviderAdapter> = {
   lumos: createLumos,
   shinigami: createShinigami,
-  kiryuu: createKiryuu
+  kiryuu: createKiryuu,
+  komiku: createKomiku
 }
 
 /** Urutan `keys` = prioritas provider. */

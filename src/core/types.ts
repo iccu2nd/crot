@@ -1,4 +1,4 @@
-export const PROVIDER_KEYS = ['shinigami', 'lumos', 'kiryuu'] as const
+export const PROVIDER_KEYS = ['shinigami', 'lumos', 'kiryuu', 'komiku'] as const
 export type ProviderKey = (typeof PROVIDER_KEYS)[number]
 export type SeriesStatus = 'ongoing' | 'completed' | 'hiatus'
 export type ProviderStatus = 'ok' | 'stale' | 'error' | 'timeout' | 'unavailable'

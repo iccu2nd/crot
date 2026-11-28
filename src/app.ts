@@ -132,7 +132,7 @@ export async function createApp(cfg: Config, opts: { docs?: boolean } = {}) {
           title: 'Unified Scraper API',
           version: '1.0.0',
           description:
-            'Satu API untuk provider Shinigami, Lumos, dan Kiryuu dengan format data seragam.\n\n' +
+            'Satu API untuk provider Shinigami, Lumos, Kiryuu, dan Komiku dengan format data seragam.\n\n' +
             'Id unified: `<provider>:<id asli>`. Respons sukses: `{ data, meta }`. Error: `{ error: { code, message } }`.'
         },
         tags: [

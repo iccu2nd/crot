@@ -11,7 +11,7 @@ const NO_STORE = { 'cache-control': 'no-store' }
 const wantsRefresh = (q: unknown) => (q as { refresh?: string } | undefined)?.refresh === '1'
 
 export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService; auth: AuthService }> = async (app, { svc, auth }) => {
-  const seriesId = idParam('Id seri unified, mis. "shinigami:<uuid>", "lumos:<slug>", "kiryuu:<slug>"')
+  const seriesId = idParam('Id seri unified, mis. "shinigami:<uuid>", "lumos:<slug>", "kiryuu:<slug>", "komiku:<slug>"')
 
   app.get<{ Params: { id: string } }>(
     '/series/:id',
@@ -48,7 +48,7 @@ export const seriesRoutes: FastifyPluginAsync<{ svc: ScraperService; auth: AuthS
         description:
           'Id chapter diambil dari `chapters[].id`. Jika provider gagal, dicarikan chapter bernomor sama di provider lain. ' +
           'Unduh gambar dengan header `imageHeaders`.',
-        params: idParam('Id chapter unified, mis. "shinigami:<uuid>", "lumos:<slug>:<chapter-slug>", "kiryuu:<slug>:<chapter-slug>"'),
+        params: idParam('Id chapter unified, mis. "shinigami:<uuid>", "lumos:<slug>:<chapter-slug>", "kiryuu:<slug>:<chapter-slug>", "komiku:<slug>:<chapter-slug>"'),
         response: R.chapter
       }
     },
