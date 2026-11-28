@@ -115,6 +115,24 @@ export class PushService {
     return true
   }
 
+  /**
+   * Beri tahu pemilik pesan Global Chat bahwa ada yang membalasnya. Data-only ke topic pribadi `u_<id>` (app subscribe saat login);
+   * teks notifikasinya dirangkai di app. Mengembalikan false bila push belum siap / dimatikan, melempar bila kirim gagal.
+   */
+  async chatReply(userId: number, fromName: string, body: string, msgId: number): Promise<boolean> {
+    if (!this.configured) return false
+    const st = await this.settings()
+    if (!st.enabled) return false
+    const m = await this.init()
+    if (!m) return false
+    await m.send({
+      topic: `u_${userId}`,
+      data: { type: 'chatreply', name: fromName.slice(0, 40), body: body.replace(/\s+/g, ' ').slice(0, 120), msgId: String(msgId) },
+      android: { priority: 'high', ttl: 3600 * 1000 }
+    })
+    return true
+  }
+
   /** Kirim notifikasi manual ke semua perangkat. Melempar Error berpesan jelas bila push belum siap / dimatikan. */
   async broadcast(p: { title: string; body: string; seriesId?: string | null }): Promise<void> {
     if (!this.configured) throw new Error('FIREBASE_SERVICE_ACCOUNT belum diisi di server')

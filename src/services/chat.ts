@@ -19,6 +19,8 @@ export interface ChatReplyRef {
   userName: string
   /** cuplikan isi pesan yang dibalas (maks. 120 karakter) */
   body: string
+  /** id pengirim pesan yang dibalas; 0 bila tidak diketahui (balasan lama yang aslinya sudah dipangkas) */
+  userId: number
 }
 
 export interface ChatItem {
@@ -31,7 +33,8 @@ export interface ChatItem {
   user: { id: number; username: string; displayName: string; avatarV: number; level: number; verified: boolean; isOwner: boolean; premium: boolean; topRank?: number }
 }
 
-const SELECT = `SELECT m.id, m.body, m.created_at, m.reply_to, m.reply_user, m.reply_body, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, ${isPremiumSql('u')} AS premium, u.verified_hidden,
+const SELECT = `SELECT m.id, m.body, m.created_at, m.reply_to, m.reply_user, m.reply_body,
+                COALESCE(m.reply_user_id, (SELECT q.user_id FROM chat_messages q WHERE q.id = m.reply_to)) AS reply_uid, u.id AS uid, u.username, u.email, u.display_name, u.xp, u.verified, ${isPremiumSql('u')} AS premium, u.verified_hidden,
                 CASE WHEN u.avatar IS NULL THEN 0 ELSE u.avatar_v END AS avatar_v
                 FROM chat_messages m JOIN users u ON u.id = m.user_id`
 
@@ -48,11 +51,17 @@ export function cleanChat(raw: unknown): string {
   return s
 }
 
+/** Pengirim push untuk balasan chat (diimplementasi PushService). */
+export interface ChatReplyNotifier {
+  chatReply(userId: number, fromName: string, body: string, msgId: number): Promise<boolean>
+}
+
 export class ChatService {
   constructor(
     private readonly pool: Pool,
     private readonly ownerEmails: string[] = [],
-    private readonly xp?: XpService
+    private readonly xp?: XpService,
+    private readonly push?: ChatReplyNotifier
   ) {}
 
   private item(r: any): ChatItem {
@@ -62,7 +71,7 @@ export class ChatService {
       id: Number(r.id),
       body: r.body,
       createdAt: new Date(r.created_at).getTime(),
-      replyTo: r.reply_to != null ? { id: Number(r.reply_to), userName: r.reply_user ?? '', body: r.reply_body ?? '' } : null,
+      replyTo: r.reply_to != null ? { id: Number(r.reply_to), userName: r.reply_user ?? '', body: r.reply_body ?? '', userId: Number(r.reply_uid ?? 0) } : null,
       user: {
         id: Number(r.uid), username: r.username, displayName: r.display_name ?? '', avatarV: Number(r.avatar_v ?? 0),
         level: levelFor(Number(r.xp ?? 0)).level, verified: (r.verified === true || isOwner) && r.verified_hidden !== true, isOwner, premium: r.premium === true
@@ -87,18 +96,23 @@ export class ChatService {
       const q = await this.pool.query(`${SELECT} WHERE m.id = $1`, [replyToId])
       if (!q.rows[0]) throw new NotFoundError('Pesan yang dibalas sudah tidak ada')
       const it = this.item(q.rows[0])
-      reply = { id: it.id, userName: it.user.displayName || it.user.username, body: it.body.replace(/\s+/g, ' ').slice(0, QUOTE_LEN) }
+      reply = { id: it.id, userName: it.user.displayName || it.user.username, body: it.body.replace(/\s+/g, ' ').slice(0, QUOTE_LEN), userId: it.user.id }
     }
     const { rows } = await this.pool.query(
-      'INSERT INTO chat_messages (user_id, body, reply_to, reply_user, reply_body) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [userId, text, reply?.id ?? null, reply?.userName ?? null, reply?.body ?? null]
+      'INSERT INTO chat_messages (user_id, body, reply_to, reply_user, reply_body, reply_user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+      [userId, text, reply?.id ?? null, reply?.userName ?? null, reply?.body ?? null, reply?.userId ?? null]
     )
     // Pemangkasan tak boleh menggagalkan pengiriman; bila gagal, list() tetap hanya memberi 50 dan pangkas berikutnya menyusul.
     await this.pool
       .query('DELETE FROM chat_messages WHERE id <= (SELECT id FROM chat_messages ORDER BY id DESC OFFSET $1 LIMIT 1)', [CHAT_KEEP])
       .catch(() => {})
     const full = await this.pool.query(`${SELECT} WHERE m.id = $1`, [rows[0].id])
-    return (await withTopRank(this.xp, [this.item(full.rows[0])]))[0]
+    const item = (await withTopRank(this.xp, [this.item(full.rows[0])]))[0]
+    // Beri tahu yang dibalas lewat push (bukan membalas diri sendiri). Fire-and-forget: gagal kirim push tak boleh menggagalkan pesan.
+    if (reply && reply.userId > 0 && reply.userId !== userId) {
+      void this.push?.chatReply(reply.userId, item.user.displayName || item.user.username, item.body, item.id).catch(() => {})
+    }
+    return item
   }
 
   /** Hapus pesan sendiri; owner boleh menghapus pesan siapa pun. */

@@ -3,18 +3,18 @@ import { test } from 'node:test'
 import { CHAT_KEEP, ChatService, cleanChat } from '../src/services/chat.js'
 
 function fakePool() {
-  const rows: { id: number; user_id: number; body: string; created_at: Date; reply_to?: number | null; reply_user?: string | null; reply_body?: string | null }[] = []
+  const rows: { id: number; user_id: number; body: string; created_at: Date; reply_to?: number | null; reply_user?: string | null; reply_body?: string | null; reply_user_id?: number | null }[] = []
   const users: Record<number, any> = { 1: { username: 'budi', xp: 100, email: 'own@x.id' }, 2: { username: 'andi', display_name: 'Andi S' } }
   let seq = 0
   let now = 1_700_000_000_000
-  const join = (c: any) => ({ id: c.id, body: c.body, created_at: c.created_at, reply_to: c.reply_to, reply_user: c.reply_user, reply_body: c.reply_body, uid: c.user_id, username: users[c.user_id].username, email: users[c.user_id].email,
+  const join = (c: any) => ({ id: c.id, body: c.body, created_at: c.created_at, reply_to: c.reply_to, reply_user: c.reply_user, reply_body: c.reply_body, reply_uid: c.reply_user_id, uid: c.user_id, username: users[c.user_id].username, email: users[c.user_id].email,
     display_name: users[c.user_id].display_name, xp: users[c.user_id].xp ?? 0, avatar_v: 0 })
   return {
     rows, tick: (ms: number) => (now += ms),
     async query(sql: string, p: any[] = []) {
       if (sql.includes("interval '10 seconds'")) return { rows: [{ n: rows.filter(r => r.user_id === p[0] && r.created_at.getTime() > now - 10_000).length }] }
       if (sql.startsWith('INSERT INTO chat_messages')) {
-        const r = { id: ++seq, user_id: p[0], body: p[1], created_at: new Date(now), reply_to: p[2], reply_user: p[3], reply_body: p[4] }
+        const r = { id: ++seq, user_id: p[0], body: p[1], created_at: new Date(now), reply_to: p[2], reply_user: p[3], reply_body: p[4], reply_user_id: p[5] }
         rows.push(r)
         return { rows: [{ id: r.id }] }
       }
@@ -84,9 +84,28 @@ test('chat: balasan menyimpan kutipan, tetap tampil walau pesan asli dihapus; ba
   const a = await svc.add(2, 'halo\n\nsemua   apa kabar')
   assert.equal(a.replyTo, null)
   const b = await svc.add(1, 'baik', a.id)
-  assert.deepEqual(b.replyTo, { id: a.id, userName: 'Andi S', body: 'halo semua apa kabar' })
+  assert.deepEqual(b.replyTo, { id: a.id, userName: 'Andi S', body: 'halo semua apa kabar', userId: 2 })
   await svc.remove(2, false, a.id)
   const list = await svc.list()
   assert.equal(list[0].replyTo?.body, 'halo semua apa kabar')
+  assert.equal(list[0].replyTo?.userId, 2) // id pengirim kutipan tetap ada walau pesan aslinya dihapus
   await assert.rejects(svc.add(1, 'balas hantu', 9999), /sudah tidak ada/)
+})
+
+test('chat: balasan memicu push ke pemilik pesan, bukan ke diri sendiri dan bukan pesan biasa; gagal kirim tak menggagalkan pesan', async () => {
+  const pool = fakePool()
+  const calls: any[][] = []
+  let fail = false
+  const push = { chatReply: async (...a: any[]) => { calls.push(a); if (fail) throw new Error('fcm down'); return true } }
+  const svc = new ChatService(pool as any, [], undefined, push)
+  const a = await svc.add(2, 'halo semua') // pesan biasa -> tanpa push
+  assert.equal(calls.length, 0)
+  const b = await svc.add(1, 'baik\n  kabar', a.id) // budi membalas andi
+  assert.deepEqual(calls, [[2, 'budi', 'baik\n  kabar', b.id]])
+  await svc.add(2, 'balas diri sendiri', a.id) // andi membalas pesannya sendiri -> tanpa push
+  assert.equal(calls.length, 1)
+  fail = true
+  const c = await svc.add(1, 'push gagal', a.id)
+  assert.equal(c.body, 'push gagal') // pesan tetap terkirim
+  assert.equal(calls.length, 2)
 })
