@@ -1,6 +1,6 @@
-# Koyami Backend
+# MiToon Backend
 
-REST API (Node 22 + TypeScript + Fastify) untuk aplikasi Koyami: agregator komik dari **Shinigami**, **Lumos**, dan **Kiryuu** dengan format data seragam, fallback otomatis antar provider, cache Redis (stale-while-revalidate), dan PostgreSQL sebagai data utama. Dokumentasi interaktif di `/docs`.
+REST API (Node 22 + TypeScript + Fastify) untuk aplikasi MiToon: agregator komik dari **Shinigami**, **Lumos**, dan **Kiryuu** dengan format data seragam, fallback otomatis antar provider, cache Redis (stale-while-revalidate), dan PostgreSQL sebagai data utama. Dokumentasi interaktif di `/docs`.
 
 ## Jalankan
 

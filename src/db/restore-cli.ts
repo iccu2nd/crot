@@ -4,7 +4,7 @@ import { createPool, migrate } from './pool.js'
 
 const file = process.argv[2]
 if (!file) {
-  console.error('Pemakaian: npm run restore -- <berkas koyami-*.ndjson.gz>')
+  console.error('Pemakaian: npm run restore -- <berkas mitoon-*.ndjson.gz>')
   process.exit(1)
 }
 

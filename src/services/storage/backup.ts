@@ -60,9 +60,8 @@ export const BACKUP_TABLES: TableSpec[] = [
 
 const BACKUP_LOCK_ID = 727276
 const WEEK_MS = 7 * 24 * 3_600_000
-const NAME_RE = /^(?:koyami|mitoon)-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.ndjson\.gz$/
-const FORMAT = 'koyami-backup'
-const LEGACY_FORMAT = 'mitoon-backup' // backup lama tetap bisa dipulihkan
+const NAME_RE = /^mitoon-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.ndjson\.gz$/
+const FORMAT = 'mitoon-backup'
 const pad = (n: number) => String(n).padStart(2, '0')
 
 export const isBackupName = (name: string) => NAME_RE.test(name)
@@ -76,7 +75,7 @@ export function parseBackupName(name: string): number | null {
 export function backupName(date = new Date()): string {
   const d = `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}`
   const t = `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`
-  return `koyami-${d}-${t}.ndjson.gz`
+  return `mitoon-${d}-${t}.ndjson.gz`
 }
 
 export function selectKeep(names: string[], keepDaily: number, keepWeekly: number): { keep: string[]; remove: string[] } {
@@ -231,7 +230,7 @@ export class BackupService {
         continue
       }
       const meta = JSON.parse(line) as { _?: string; counts?: Record<string, number> }
-      if ((meta._ === FORMAT || meta._ === LEGACY_FORMAT)) manifest = true
+      if (meta._ === FORMAT) manifest = true
       else if (meta._ === 'end') end = meta.counts ?? {}
     }
     if (!manifest || !end) throw new Error('Backup tidak lengkap')
@@ -307,7 +306,7 @@ export class BackupService {
           continue
         }
         const meta = JSON.parse(line) as { _?: string; schema?: string | null }
-        if ((meta._ === FORMAT || meta._ === LEGACY_FORMAT)) {
+        if (meta._ === FORMAT) {
           schema = meta.schema ?? null
           const current = await client.query<{ name: string | null }>('SELECT max(name) AS name FROM schema_migrations')
           const have = current.rows[0]?.name ?? null

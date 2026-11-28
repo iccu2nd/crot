@@ -55,7 +55,7 @@ interface PublicProfile {
   joinedAt: number
   commentCount: number
   verified: boolean
-  /** true bila email ada di OWNER_EMAILS — label Owner Koyami di app */
+  /** true bila email ada di OWNER_EMAILS — label Owner MiToon di app */
   isOwner: boolean
   /** Premium Member */
   premium: boolean

@@ -122,7 +122,7 @@ describe('storage policy', () => {
 describe('rotasi backup', () => {
   it('nama backup bisa dibaca kembali', () => {
     const d = new Date(Date.UTC(2026, 10, 27, 3, 4, 5))
-    assert.equal(backupName(d), 'koyami-20261127-030405.ndjson.gz')
+    assert.equal(backupName(d), 'mitoon-20261127-030405.ndjson.gz')
     assert.equal(parseBackupName(backupName(d)), d.getTime())
     assert.equal(parseBackupName('../etc/passwd'), null)
   })
@@ -145,7 +145,7 @@ describe('BackupService', () => {
   const library = [{ user_id: 1, series_id: 'lumos:a' }]
 
   it('membuat backup terverifikasi lalu memulihkannya ke database kosong', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'koyami-bk-'))
+    const dir = await mkdtemp(join(tmpdir(), 'mitoon-bk-'))
     try {
       const source = new FakeClient({ users, user_library: library })
       const svc = new BackupService(poolOf(source), { dir, keepDaily: 3, keepWeekly: 1 })
@@ -174,7 +174,7 @@ describe('BackupService', () => {
   })
 
   it('membatalkan restore bila berkas terpotong', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'koyami-bk-'))
+    const dir = await mkdtemp(join(tmpdir(), 'mitoon-bk-'))
     try {
       const svc = new BackupService(poolOf(new FakeClient({ users })), { dir, keepDaily: 3, keepWeekly: 1 })
       const { name } = await svc.create()

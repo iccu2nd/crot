@@ -152,7 +152,7 @@ export class StorageManager implements StorageGuard {
 
   private async warnIfStillHigh(after: StorageSnapshot | null): Promise<void> {
     if (!after || levelRank(after.level) < levelRank('high')) return
-    const text = `[Koyami] Pembersihan otomatis selesai tetapi storage masih ${formatBytes(after.usedBytes)} dari ${formatBytes(after.limitBytes)} (${(after.ratio * 100).toFixed(1)}%). Sisanya kemungkinan data pengguna (foto profil, komentar, pustaka); tinjau di panel admin atau naikkan kapasitas database.`
+    const text = `[MiToon] Pembersihan otomatis selesai tetapi storage masih ${formatBytes(after.usedBytes)} dari ${formatBytes(after.limitBytes)} (${(after.ratio * 100).toFixed(1)}%). Sisanya kemungkinan data pengguna (foto profil, komentar, pustaka); tinjau di panel admin atau naikkan kapasitas database.`
     this.log.error({ usedBytes: after.usedBytes, level: after.level }, text)
     await this.monitor.alert('still-high', text)
   }
